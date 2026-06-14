@@ -1,0 +1,133 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User account information and role",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["ADMIN", "CONTENT_OWNER", "BUYER"] },
+        "companyName": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "MediaAsset": {
+      "title": "Media Asset",
+      "description": "Content asset metadata and status",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["DRAFT", "SUBMITTED", "LEGAL_REVIEW", "QC_REVIEW", "APPROVED", "LIVE", "REJECTED"] },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "ownerId", "title", "status"]
+    },
+    "RightsCatalogueEntry": {
+      "title": "Rights Catalogue Entry",
+      "description": "Licensing rights for an asset",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "assetId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "availabilityStatus": { "type": "string", "enum": ["AVAILABLE", "ON_HOLD", "LICENSED"] },
+        "licenseStart": { "type": "number" },
+        "licenseEnd": { "type": "number" }
+      },
+      "required": ["id", "assetId", "ownerId", "availabilityStatus"]
+    },
+    "DealRequest": {
+      "title": "Deal Request",
+      "description": "Request for licensing an asset",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "buyerId": { "type": "string" },
+        "assetId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "rightsId": { "type": "string" },
+        "status": { "type": "string", "enum": ["REQUESTED", "OWNER_REVIEW", "ADMIN_REVIEW", "APPROVED", "REJECTED"] },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "buyerId", "assetId", "ownerId", "rightsId", "status"]
+    },
+    "PrivateScreener": {
+      "title": "Private Screener",
+      "description": "Private viewing link for a buyer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "assetId": { "type": "string" },
+        "buyerId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "expiryDate": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "assetId", "buyerId", "ownerId", "expiryDate"]
+    },
+    "Contract": {
+      "title": "Contract",
+      "description": "Legal contract for a deal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "dealId": { "type": "string" },
+        "assetId": { "type": "string" },
+        "buyerId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "SIGNED", "EXPIRED"] }
+      },
+      "required": ["id", "dealId", "buyerId", "ownerId", "status"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "In-app notification for a user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "userId", "title", "read"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile data"
+    },
+    "assets/{assetId}": {
+      "schema": "MediaAsset",
+      "description": "Media content assets"
+    },
+    "rights/{rightsId}": {
+      "schema": "RightsCatalogueEntry",
+      "description": "Licensing rights definitions"
+    },
+    "deals/{dealId}": {
+      "schema": "DealRequest",
+      "description": "Licensing deal requests and negotiations"
+    },
+    "screeners/{screenerId}": {
+      "schema": "PrivateScreener",
+      "description": "Private screening links"
+    },
+    "contracts/{contractId}": {
+      "schema": "Contract",
+      "description": "Deal contracts"
+    },
+    "notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications"
+    }
+  }
+}
