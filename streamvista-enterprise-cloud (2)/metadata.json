@@ -1,0 +1,6 @@
+{
+  "name": "Cloud X - Digital Vault",
+  "description": "Secure cloud storage platform for agencies and media companies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
