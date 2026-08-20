@@ -67,5 +67,11 @@ service cloud.firestore {
       allow create: if isAuthenticated();
       allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
     }
+
+    match /audit_logs/{logId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
   }
 }

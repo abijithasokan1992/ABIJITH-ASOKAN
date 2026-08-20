@@ -97,3 +97,30 @@ export interface Notification {
   read: boolean;
   createdAt: number;
 }
+
+export type AuditAction = 
+  | 'deal_signed' 
+  | 'screener_viewed' 
+  | 'role_switched' 
+  | 'deal_proposed' 
+  | 'deal_approved' 
+  | 'deal_rejected' 
+  | 'screener_created' 
+  | 'user_login' 
+  | 'user_logout';
+
+export interface AuditLog {
+  id: string;
+  action: AuditAction;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  role: UserRole;
+  details: string;
+  resourceId?: string;
+  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'auth';
+  metadata?: Record<string, any>;
+  ipAddress?: string;
+  timestamp: number;
+}
+

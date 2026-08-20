@@ -3,17 +3,19 @@ import {
   Mail, Globe, Shield, Sparkles, Loader2, Video, Key, FileText, 
   CheckCircle, PlusCircle, Clock, Send, Eye, ShieldAlert, ArrowRight, 
   UserCheck, RefreshCw, Lock, Unlock, Check, ThumbsUp, ThumbsDown, LogOut, X,
-  BadgeCheck, UserCircle, Briefcase, Film, Scale
+  BadgeCheck, UserCircle, Briefcase, Film, Scale, ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { User } from 'firebase/auth';
 import { 
   initAuth, googleSignIn, logout as firebaseLogout, 
-  syncUserProfile, getUserProfile 
+  syncUserProfile, getUserProfile,
+  subscribeAuditLogs, logAuditEvent, fetchAuditLogs
 } from './lib/firebase';
 import { GmailDashboard } from './components/GmailDashboard';
 import { ScreenerModal } from './components/ScreenerModal';
-import { MediaAsset, RightsCatalogueEntry, DealRequest, PrivateScreener, Contract, UserRole } from './types';
+import { AuditLogView } from './components/AuditLogView';
+import { MediaAsset, RightsCatalogueEntry, DealRequest, PrivateScreener, Contract, UserRole, AuditLog } from './types';
 import { 
   INITIAL_ASSETS, INITIAL_RIGHTS, INITIAL_DEALS, 
   INITIAL_SCREENERS, INITIAL_CONTRACTS 
@@ -48,9 +50,11 @@ export default function App() {
   const [deals, setDeals] = useState<DealRequest[]>(INITIAL_DEALS);
   const [screeners, setScreeners] = useState<PrivateScreener[]>(INITIAL_SCREENERS);
   const [contracts, setContracts] = useState<Contract[]>(INITIAL_CONTRACTS);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [isAuditLoading, setIsAuditLoading] = useState<boolean>(false);
 
   // Navigation & Workspace UI
-  const [activeTab, setActiveTab] = useState<'catalog' | 'deals' | 'screeners' | 'gmail'>('catalog');
+  const [activeTab, setActiveTab] = useState<'catalog' | 'deals' | 'screeners' | 'gmail' | 'audit'>('catalog');
   const [activeScreenerVideo, setActiveScreenerVideo] = useState<{ title: string; videoUrl: string; watermarkText: string } | null>(null);
 
   // Forms / Actions
@@ -65,6 +69,32 @@ export default function App() {
 
   // Compose Template to bridge catalogue actions directly to Gmail dispatch drawer
   const [composeTemplate, setComposeTemplate] = useState<{ to: string; subject: string; body: string } | null>(null);
+
+  // Real-time Firestore Audit Log Subscription
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribeAudit = subscribeAuditLogs((logs) => {
+      setAuditLogs(logs);
+    });
+    return () => {
+      if (unsubscribeAudit) unsubscribeAudit();
+    };
+  }, [user]);
+
+  const handleRefreshAuditLogs = async () => {
+    setIsAuditLoading(true);
+    try {
+      const logs = await fetchAuditLogs();
+      if (logs && logs.length > 0) {
+        setAuditLogs(logs);
+      }
+      showNotification('Compliance audit trail refreshed from Firestore.', 'info');
+    } catch {
+      // Ignored
+    } finally {
+      setIsAuditLoading(false);
+    }
+  };
 
   useEffect(() => {
     // Initialise Firebase Auth session observer
@@ -107,6 +137,22 @@ export default function App() {
         setUser(result.user);
         setToken(result.accessToken);
         showNotification(`Welcome, ${result.user.displayName || result.user.email || 'Authenticated User'}! Google session initialized.`);
+
+        // Record audit log for compliance login event
+        logAuditEvent({
+          action: 'user_login',
+          userId: result.user.uid,
+          userEmail: result.user.email || '',
+          userName: result.user.displayName || result.user.email || 'Authenticated User',
+          role: activeRole,
+          details: `User session authenticated via Google Identity (${result.user.email})`,
+          resourceType: 'auth',
+          metadata: {
+            authProvider: 'google.com',
+            emailVerified: result.user.emailVerified,
+            timestamp: Date.now()
+          }
+        });
       }
     } catch (err: any) {
       console.warn('Google Sign-In notice:', err?.code || err?.message || err);
@@ -123,11 +169,28 @@ export default function App() {
   };
 
   const handleRoleChange = async (newRole: UserRole) => {
+    const prevRole = activeRole;
     setActiveRole(newRole);
     if (user) {
       try {
         await syncUserProfile(user, newRole);
         showNotification(`Active role switched to ${newRole === 'BUYER' ? 'Buyer (Acquisitions)' : newRole === 'CONTENT_OWNER' ? 'Content Owner (Studio)' : 'Legal Advisor'}`);
+        
+        // Record audit log for perspective switch
+        logAuditEvent({
+          action: 'role_switched',
+          userId: user.uid,
+          userEmail: user.email || '',
+          userName: user.displayName || user.email || 'Authenticated User',
+          role: newRole,
+          details: `Operator changed workspace perspective from ${prevRole} to ${newRole}`,
+          resourceType: 'auth',
+          metadata: {
+            previousRole: prevRole,
+            newRole: newRole,
+            switchTime: Date.now()
+          }
+        });
       } catch {
         // Non-blocking
       }
@@ -135,6 +198,17 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    if (user) {
+      logAuditEvent({
+        action: 'user_logout',
+        userId: user.uid,
+        userEmail: user.email || '',
+        userName: user.displayName || user.email || 'Authenticated User',
+        role: activeRole,
+        details: `User logged out of active session (${user.email})`,
+        resourceType: 'auth'
+      });
+    }
     await firebaseLogout();
     setUser(null);
     setToken(null);
@@ -173,6 +247,27 @@ export default function App() {
     setDeals([newDeal, ...deals]);
     showNotification(`Submitted offer of $${proposedPrice.toLocaleString()} for "${asset.title}". Content owner has been notified.`);
     
+    // Record audit log for deal proposal
+    logAuditEvent({
+      action: 'deal_proposed',
+      userId: user.uid,
+      userEmail: user.email || '',
+      userName: user.displayName || user.email || 'Authenticated User',
+      role: activeRole,
+      details: `Submitted licensing offer of $${proposedPrice.toLocaleString()} for "${asset.title}" (${rightsEntry.territories.join(', ')})`,
+      resourceId: newDeal.id,
+      resourceType: 'deal',
+      metadata: {
+        dealId: newDeal.id,
+        assetId: asset.id,
+        assetTitle: asset.title,
+        proposedPrice,
+        territories: rightsEntry.territories,
+        licenseTypes: rightsEntry.licenseTypes,
+        message
+      }
+    });
+
     // Auto clear input state
     setProposedBids(prev => {
       const copy = { ...prev };
@@ -199,6 +294,29 @@ export default function App() {
     }));
 
     const deal = deals.find(d => d.id === dealId);
+    const asset = deal ? getAssetObj(deal.assetId) : null;
+
+    if (deal && user) {
+      logAuditEvent({
+        action: approve ? 'deal_approved' : 'deal_rejected',
+        userId: user.uid,
+        userEmail: user.email || '',
+        userName: user.displayName || user.email || 'Authenticated User',
+        role: activeRole,
+        details: `${approve ? 'Approved' : 'Declined'} licensing deal for "${asset?.title || 'Film Asset'}" (Offer: $${deal.proposedPrice?.toLocaleString() || 'N/A'})`,
+        resourceId: deal.id,
+        resourceType: 'deal',
+        metadata: {
+          dealId: deal.id,
+          assetId: deal.assetId,
+          assetTitle: asset?.title,
+          proposedPrice: deal.proposedPrice,
+          buyerId: deal.buyerId,
+          decision: approve ? 'APPROVED' : 'REJECTED'
+        }
+      });
+    }
+
     if (deal && approve) {
       const newContract: Contract = {
         id: `contract-${Date.now()}`,
@@ -225,6 +343,31 @@ export default function App() {
       }
       return c;
     }));
+
+    const contract = contracts.find(c => c.id === contractId);
+    const asset = contract ? getAssetObj(contract.assetId) : null;
+
+    if (user) {
+      logAuditEvent({
+        action: 'deal_signed',
+        userId: user.uid,
+        userEmail: user.email || '',
+        userName: user.displayName || user.email || 'Authenticated User',
+        role: activeRole,
+        details: `Legally counter-signed license agreement for "${asset?.title || 'Film Asset'}" (Contract ID: ${contractId})`,
+        resourceId: contractId,
+        resourceType: 'contract',
+        metadata: {
+          contractId,
+          dealId: contract?.dealId,
+          assetId: contract?.assetId,
+          assetTitle: asset?.title,
+          signerRole: activeRole,
+          verificationHash: `SIG-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`
+        }
+      });
+    }
+
     showNotification(`Agreement successfully counter-signed under ${user?.email || 'authenticated user'}!`);
   };
 
@@ -253,6 +396,27 @@ export default function App() {
 
     setScreeners([newScreener, ...screeners]);
     
+    // Log audit action
+    logAuditEvent({
+      action: 'screener_created',
+      userId: user.uid,
+      userEmail: user.email || '',
+      userName: user.displayName || user.email || 'Authenticated User',
+      role: activeRole,
+      details: `Generated forensically watermarked SafePlay screener for "${generatingScreenerForAsset.title}" dispatched to ${screenerRecipient}`,
+      resourceId: newScreener.id,
+      resourceType: 'screener',
+      metadata: {
+        screenerId: newScreener.id,
+        assetId: generatingScreenerForAsset.id,
+        assetTitle: generatingScreenerForAsset.title,
+        recipient: screenerRecipient,
+        watermarkText: newScreener.watermarkText,
+        durationDays: screenerDurationDays,
+        expiryDate: newScreener.expiryDate
+      }
+    });
+
     // Automatically pre-fill a professional email draft for dispatch!
     setComposeTemplate({
       to: screenerRecipient,
@@ -511,7 +675,8 @@ export default function App() {
                   { id: 'catalog', label: 'Movie Catalogue', icon: Globe },
                   { id: 'deals', label: 'Offers & Deals', icon: FileText, badge: deals.filter(d => d.status === 'REQUESTED').length },
                   { id: 'screeners', label: 'Shared Previews', icon: Video, badge: screeners.length },
-                  { id: 'gmail', label: 'Gmail Manager', icon: Mail }
+                  { id: 'gmail', label: 'Gmail Manager', icon: Mail },
+                  { id: 'audit', label: 'Audit Trail', icon: ShieldCheck, badge: auditLogs.length }
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -525,7 +690,9 @@ export default function App() {
                     <tab.icon size={14} className={activeTab === tab.id ? 'text-blue-500' : 'text-slate-400'} />
                     <span>{tab.label}</span>
                     {tab.badge !== undefined && tab.badge > 0 && (
-                      <span className="ml-1 px-1.5 py-0.5 rounded-full bg-blue-600 text-[9px] font-bold text-white font-mono">
+                      <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold font-mono ${
+                        tab.id === 'audit' ? 'bg-slate-800 text-white' : 'bg-blue-600 text-white'
+                      }`}>
                         {tab.badge}
                       </span>
                     )}
@@ -705,6 +872,27 @@ export default function App() {
                                 <button
                                   onClick={() => {
                                     const activeSc = screeners.find(s => s.assetId === asset.id);
+                                    const watermark = activeSc ? activeSc.watermarkText : `CONFIDENTIAL FEED FOR ${user.email} // STREAMVISTA`;
+                                    const videoUrl = activeSc ? activeSc.screenerUrl : asset.videoUrl;
+                                    
+                                    // Log audit screener viewed event
+                                    logAuditEvent({
+                                      action: 'screener_viewed',
+                                      userId: user.uid,
+                                      userEmail: user.email || '',
+                                      userName: user.displayName || user.email || 'Authenticated User',
+                                      role: activeRole,
+                                      details: `Viewed forensic watermarked SafePlay stream for "${asset.title}"`,
+                                      resourceId: activeSc ? activeSc.id : asset.id,
+                                      resourceType: 'screener',
+                                      metadata: {
+                                        assetId: asset.id,
+                                        assetTitle: asset.title,
+                                        watermarkText: watermark,
+                                        viewTimestamp: Date.now()
+                                      }
+                                    });
+
                                     if (activeSc) {
                                       setActiveScreenerVideo({
                                         title: asset.title,
@@ -716,7 +904,7 @@ export default function App() {
                                       setActiveScreenerVideo({
                                         title: asset.title,
                                         videoUrl: asset.videoUrl,
-                                        watermarkText: `CONFIDENTIAL FEED FOR ${user.email} // STREAMVISTA`
+                                        watermarkText: watermark
                                       });
                                     }
                                   }}
@@ -941,6 +1129,27 @@ export default function App() {
                                 <button 
                                   onClick={() => {
                                     sc.viewCount++;
+                                    
+                                    // Log audit screener viewed event
+                                    logAuditEvent({
+                                      action: 'screener_viewed',
+                                      userId: user.uid,
+                                      userEmail: user.email || '',
+                                      userName: user.displayName || user.email || 'Authenticated User',
+                                      role: activeRole,
+                                      details: `Accessed shared preview stream for "${assetObj.title}" (Link ID: ${sc.id})`,
+                                      resourceId: sc.id,
+                                      resourceType: 'screener',
+                                      metadata: {
+                                        screenerId: sc.id,
+                                        assetId: assetObj.id,
+                                        assetTitle: assetObj.title,
+                                        watermarkText: sc.watermarkText,
+                                        viewCount: sc.viewCount,
+                                        timestamp: Date.now()
+                                      }
+                                    });
+
                                     setActiveScreenerVideo({
                                       title: assetObj.title,
                                       videoUrl: sc.screenerUrl,
@@ -990,6 +1199,22 @@ export default function App() {
                       onLogout={handleLogout}
                       composeTemplate={composeTemplate}
                       clearTemplate={() => setComposeTemplate(null)}
+                    />
+                  </motion.div>
+                )}
+
+                {activeTab === 'audit' && (
+                  <motion.div 
+                    key="audit-view"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                  >
+                    <AuditLogView 
+                      logs={auditLogs}
+                      isLoading={isAuditLoading}
+                      onRefresh={handleRefreshAuditLogs}
+                      currentUserRole={activeRole}
                     />
                   </motion.div>
                 )}

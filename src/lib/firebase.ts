@@ -5,7 +5,7 @@ import {
   query, where, onSnapshot, getDocFromServer, serverTimestamp 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { UserProfile, UserRole } from '../types';
+import { UserProfile, UserRole, AuditLog, AuditAction } from '../types';
 
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
@@ -174,11 +174,97 @@ export const getUserProfile = async (uid: string): Promise<UserProfile | null> =
 
 export const getAccessToken = async (): Promise<string | null> => {
   return cachedAccessToken;
-};
+ };
 
 export const logout = async () => {
   await auth.signOut();
   cachedAccessToken = null;
 };
+
+/**
+ * Log a compliance action to the Firebase-backed 'audit_logs' collection.
+ */
+export const logAuditEvent = async (data: {
+  action: AuditAction;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  role: UserRole;
+  details: string;
+  resourceId?: string;
+  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'auth';
+  metadata?: Record<string, any>;
+}): Promise<string> => {
+  const logId = `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const logPath = `audit_logs/${logId}`;
+  const logEntry: AuditLog = {
+    id: logId,
+    action: data.action,
+    userId: data.userId,
+    userEmail: data.userEmail,
+    userName: data.userName,
+    role: data.role,
+    details: data.details,
+    resourceId: data.resourceId || '',
+    resourceType: data.resourceType,
+    metadata: data.metadata || {},
+    timestamp: Date.now()
+  };
+
+  try {
+    const logDocRef = doc(db, 'audit_logs', logId);
+    await setDoc(logDocRef, logEntry);
+    return logId;
+  } catch (err) {
+    console.warn('Audit log write non-fatal warning:', err);
+    // Don't break UI on background log write, but log formatted error
+    return logId;
+  }
+};
+
+/**
+ * Subscribe in real-time to the 'audit_logs' collection
+ */
+export const subscribeAuditLogs = (onUpdate: (logs: AuditLog[]) => void) => {
+  try {
+    const logsCol = collection(db, 'audit_logs');
+    return onSnapshot(logsCol, (snapshot) => {
+      const logs: AuditLog[] = [];
+      snapshot.forEach((docSnap) => {
+        const item = docSnap.data() as AuditLog;
+        logs.push(item);
+      });
+      // Sort newest first
+      logs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      onUpdate(logs);
+    }, (error) => {
+      console.warn('Audit logs snapshot listener warning:', error);
+    });
+  } catch (err) {
+    console.warn('Failed to attach audit log listener:', err);
+    return () => {};
+  }
+};
+
+/**
+ * Fallback fetch for audit logs
+ */
+export const fetchAuditLogs = async (): Promise<AuditLog[]> => {
+  const logPath = 'audit_logs';
+  try {
+    const logsCol = collection(db, 'audit_logs');
+    const snapshot = await getDocs(logsCol);
+    const logs: AuditLog[] = [];
+    snapshot.forEach((docSnap) => {
+      logs.push(docSnap.data() as AuditLog);
+    });
+    logs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    return logs;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, logPath);
+    return [];
+  }
+};
+
 
 

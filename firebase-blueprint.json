@@ -98,6 +98,23 @@
         "createdAt": { "type": "number" }
       },
       "required": ["id", "userId", "title", "read"]
+    },
+    "AuditLog": {
+      "title": "Audit Log",
+      "description": "Compliance activity log for tracking key user actions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "action": { "type": "string", "enum": ["deal_signed", "screener_viewed", "role_switched", "deal_proposed", "deal_approved", "deal_rejected", "screener_created", "user_login"] },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userName": { "type": "string" },
+        "role": { "type": "string" },
+        "details": { "type": "string" },
+        "metadata": { "type": "object" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "action", "userId", "timestamp"]
     }
   },
   "firestore": {
@@ -128,6 +145,10 @@
     "notifications/{notificationId}": {
       "schema": "Notification",
       "description": "User notifications"
+    },
+    "audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Compliance and activity audit log entries"
     }
   }
 }
