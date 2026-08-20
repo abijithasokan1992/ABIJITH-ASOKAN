@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AuditLog, AuditAction, UserRole } from '../types';
+import { AuditFrequencyChart } from './AuditFrequencyChart';
 
 interface AuditLogViewProps {
   logs: AuditLog[];
@@ -255,6 +256,9 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
           <p className="text-[11px] text-slate-500">Perspective modifications</p>
         </div>
       </div>
+
+      {/* 30-Day Activity Frequency D3 Line Chart */}
+      <AuditFrequencyChart logs={logs} />
 
       {/* Filter & Search Bar */}
       <div className="p-4 bg-white border border-slate-200 rounded-2xl shadow-2xs flex flex-col md:flex-row items-center gap-3">

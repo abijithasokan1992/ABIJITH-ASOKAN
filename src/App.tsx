@@ -18,6 +18,7 @@ import { AuditLogView } from './components/AuditLogView';
 import { StreamVistaAISuite } from './components/StreamVistaAISuite';
 import { GlobalRightsHeatmap } from './components/GlobalRightsHeatmap';
 import { SupabaseSyncModal } from './components/SupabaseSyncModal';
+import { GoogleWorkspaceHub } from './components/GoogleWorkspaceHub';
 import { 
   isSupabaseConfigured, 
   supabaseFetchAssets, 
@@ -72,7 +73,8 @@ export default function App() {
   const [isAuditLoading, setIsAuditLoading] = useState<boolean>(false);
 
   // Navigation & Workspace UI
-  const [activeTab, setActiveTab] = useState<'catalog' | 'deals' | 'screeners' | 'gmail' | 'audit' | 'ai_studio'>('catalog');
+  const [activeTab, setActiveTab] = useState<'catalog' | 'deals' | 'screeners' | 'workspace' | 'gmail' | 'audit' | 'ai_studio'>('catalog');
+  const [workspaceInitialTab, setWorkspaceInitialTab] = useState<'chat' | 'sheets' | 'calendar' | 'docs' | 'forms'>('chat');
   const [activeScreenerVideo, setActiveScreenerVideo] = useState<{ title: string; videoUrl: string; watermarkText: string } | null>(null);
 
   // Forms / Actions
@@ -1047,6 +1049,7 @@ export default function App() {
                   { id: 'catalog', label: 'Movie Catalogue', icon: Globe },
                   { id: 'deals', label: 'Offers & Deals', icon: FileText, badge: deals.filter(d => d.status === 'REQUESTED').length },
                   { id: 'screeners', label: 'Shared Previews', icon: Video, badge: screeners.length },
+                  { id: 'workspace', label: 'Workspace Hub', icon: Building2, badgeText: 'Chat • Sheets • Cal • Docs • Forms' },
                   { id: 'gmail', label: 'Gmail Manager', icon: Mail },
                   { id: 'audit', label: 'Audit Trail', icon: ShieldCheck, badge: auditLogs.length },
                   { id: 'ai_studio', label: 'AI Innovation Studio', icon: Sparkles, badgeText: 'AI Enterprise' }
@@ -1617,6 +1620,24 @@ export default function App() {
                         })}
                       </div>
                     )}
+                  </motion.div>
+                )}
+
+                {activeTab === 'workspace' && (
+                  <motion.div 
+                    key="workspace-view"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                  >
+                    <GoogleWorkspaceHub 
+                      user={user}
+                      activeRole={activeRole}
+                      assets={assets}
+                      deals={deals}
+                      screeners={screeners}
+                      contracts={contracts}
+                    />
                   </motion.div>
                 )}
 

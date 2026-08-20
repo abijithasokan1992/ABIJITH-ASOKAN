@@ -1,6 +1,6 @@
 {
   "name": "STREAMVISTA Rights Cloud",
-  "description": "B2B Content Licensing, Private Screening, and Distribution Platform with Gmail integration.",
+  "description": "B2B Content Licensing, Private Screening, and Distribution Platform with Google Workspace (Chat, Sheets, Calendar, Docs, Forms, Gmail) and Supabase RLS sync.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,14 +1,24 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getFirestore, doc, setDoc, getDoc, getDocs, collection, 
   query, where, onSnapshot, getDocFromServer, serverTimestamp 
 } from 'firebase/firestore';
+import { getAuth, Auth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { AppUser, UserProfile, UserRole, AuditLog, AuditAction } from '../types';
 import { isSupabaseConfigured, supabaseInsertAuditLog } from './supabase';
 
-export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+const customDbId = (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId;
+export const db = customDbId ? getFirestore(app, customDbId) : getFirestore(app);
+
+let authInstance: Auth | null = null;
+export function getFirebaseAuth(): Auth {
+  if (!authInstance) {
+    authInstance = getAuth(app);
+  }
+  return authInstance;
+}
 
 export enum OperationType {
   CREATE = 'create',
