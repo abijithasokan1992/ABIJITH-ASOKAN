@@ -350,20 +350,51 @@ export default function App() {
     });
   };
 
-  // 2. Approve or Reject a proposed licensing offer (Content Owner action)
+  // 2. Approve or Reject a proposed licensing offer (Content Owner action with RLS check)
   const handleReviewOffer = (dealId: string, approve: boolean) => {
-    setDeals(deals.map(deal => {
-      if (deal.id === dealId) {
+    const deal = deals.find(d => d.id === dealId);
+    if (!deal) return;
+
+    // Verify ownership: only the owner studio or an ADMIN can accept/reject deals
+    const isDealOwner = (user && deal.ownerId === user.uid) || 
+                        (activeRole === 'CONTENT_OWNER' && (deal.ownerId === 'owner-paramount' || deal.ownerId === 'owner-a24')) || 
+                        activeRole === 'ADMIN';
+
+    if (!isDealOwner) {
+      showNotification('RLS Violation Blocked: You do not have permission to arbitrate offers for another studio.', 'info');
+      if (user) {
+        logAuditEvent({
+          action: 'RLS_VIOLATION',
+          userId: user.uid,
+          userEmail: user.email || '',
+          userName: user.displayName || user.email || 'Unauthorized Operator',
+          role: activeRole,
+          details: `RLS Access Denied: Unauthorized user attempted to ${approve ? 'approve' : 'reject'} deal proposal ${dealId} for asset "${getAssetObj(deal.assetId)?.title || deal.assetId}" (Target Studio: ${deal.ownerId})`,
+          resourceId: dealId,
+          resourceType: 'deal',
+          metadata: {
+            attemptedAction: approve ? 'APPROVE_DEAL' : 'REJECT_DEAL',
+            dealOwnerId: deal.ownerId,
+            dealBuyerId: deal.buyerId,
+            userUid: user.uid,
+            violationPolicy: 'deal_requests_update_policy (owner_id = auth.uid())'
+          }
+        });
+      }
+      return;
+    }
+
+    setDeals(deals.map(dealItem => {
+      if (dealItem.id === dealId) {
         return {
-          ...deal,
+          ...dealItem,
           status: approve ? 'APPROVED' : 'REJECTED'
         };
       }
-      return deal;
+      return dealItem;
     }));
 
-    const deal = deals.find(d => d.id === dealId);
-    const asset = deal ? getAssetObj(deal.assetId) : null;
+    const asset = getAssetObj(deal.assetId);
     const newStatus = approve ? 'APPROVED' : 'REJECTED';
 
     // Synchronize deal status update to Supabase PostgreSQL (RLS validated)
@@ -373,7 +404,7 @@ export default function App() {
       });
     }
 
-    if (deal && user) {
+    if (user) {
       logAuditEvent({
         action: approve ? 'deal_approved' : 'deal_rejected',
         userId: user.uid,
@@ -394,7 +425,7 @@ export default function App() {
       });
     }
 
-    if (deal && approve) {
+    if (approve) {
       const newContract: Contract = {
         id: `contract-${Date.now()}`,
         dealId: deal.id,
@@ -453,10 +484,34 @@ export default function App() {
     const target = assets.find(a => a.id === assetId);
     if (!target) return;
 
-    // Verify studio authorization
-    const isOwner = target.ownerId === user?.uid || target.ownerId === 'owner-paramount' || target.ownerId === 'owner-a24' || activeRole === 'ADMIN';
+    // Verify studio authorization: only the owner studio or an ADMIN can edit metadata
+    const isOwner = (user && target.ownerId === user.uid) || 
+                    (activeRole === 'CONTENT_OWNER' && (target.ownerId === 'owner-paramount' || target.ownerId === 'owner-a24')) || 
+                    activeRole === 'ADMIN';
+
     if (!isOwner) {
-      showNotification('RLS Violation: You can only manage content assets belonging to your studio.', 'info');
+      showNotification('RLS Violation Blocked: Unauthorized attempt to mutate another studio catalog asset.', 'info');
+      
+      if (user) {
+        logAuditEvent({
+          action: 'RLS_VIOLATION',
+          userId: user.uid,
+          userEmail: user.email || '',
+          userName: user.displayName || user.email || 'Unauthorized Operator',
+          role: activeRole,
+          details: `RLS Access Denied: Unauthorized attempt to update studio asset "${target.title}" (Studio Owner: ${target.ownerId})`,
+          resourceId: assetId,
+          resourceType: 'asset',
+          metadata: {
+            attemptedAction: 'UPDATE_ASSET_METADATA',
+            targetOwnerId: target.ownerId,
+            userUid: user.uid,
+            assetTitle: target.title,
+            updatesAttempted: updates,
+            violationPolicy: 'media_assets_update_policy (owner_id = auth.uid())'
+          }
+        });
+      }
       return;
     }
 
@@ -502,6 +557,28 @@ export default function App() {
 
   // 4. Create custom private safeplay viewing link
   const handleOpenScreenerCreator = (asset: MediaAsset) => {
+    if (activeRole === 'BUYER') {
+      showNotification('RLS Violation Blocked: Buyers cannot generate safeplay screeners.', 'info');
+      if (user) {
+        logAuditEvent({
+          action: 'RLS_VIOLATION',
+          userId: user.uid,
+          userEmail: user.email || '',
+          userName: user.displayName || user.email || 'Unauthorized Buyer',
+          role: activeRole,
+          details: `RLS Access Denied: Buyer attempted unauthorized safeplay screener generation on asset "${asset.title}"`,
+          resourceId: asset.id,
+          resourceType: 'screener',
+          metadata: {
+            attemptedAction: 'OPEN_SCREENER_CREATOR',
+            assetOwnerId: asset.ownerId,
+            userUid: user.uid,
+            violationPolicy: 'private_screeners_insert_policy'
+          }
+        });
+      }
+      return;
+    }
     setGeneratingScreenerForAsset(asset);
     setScreenerRecipient('acquisitions@paramount.com');
     setScreenerWatermark(`CONFIDENTIAL // AUTHORIZED FOR: ${user?.email || 'LICENSED REVIEWER'} // UID: ${user?.uid?.substring(0, 8) || 'VERIFIED'}`);
@@ -510,6 +587,28 @@ export default function App() {
   const handleCreateScreener = (e: React.FormEvent) => {
     e.preventDefault();
     if (!generatingScreenerForAsset || !user) return;
+
+    if (activeRole === 'BUYER') {
+      showNotification('RLS Violation Blocked: Buyers are not permitted to generate safeplay links.', 'info');
+      logAuditEvent({
+        action: 'RLS_VIOLATION',
+        userId: user.uid,
+        userEmail: user.email || '',
+        userName: user.displayName || user.email || 'Unauthorized Buyer',
+        role: activeRole,
+        details: `RLS Access Denied: Buyer attempted unauthorized safeplay screener generation on asset "${generatingScreenerForAsset.title}"`,
+        resourceId: generatingScreenerForAsset.id,
+        resourceType: 'screener',
+        metadata: {
+          attemptedAction: 'GENERATE_SCREENER',
+          assetOwnerId: generatingScreenerForAsset.ownerId,
+          userUid: user.uid,
+          violationPolicy: 'private_screeners_insert_policy'
+        }
+      });
+      setGeneratingScreenerForAsset(null);
+      return;
+    }
 
     const newScreener: PrivateScreener = {
       id: `screener-${Date.now()}`,

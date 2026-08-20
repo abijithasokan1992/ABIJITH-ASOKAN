@@ -59,13 +59,20 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
   const stats = useMemo(() => {
     const total = logs.length;
     const dealsSigned = logs.filter(l => l.action === 'deal_signed').length;
+    const rlsViolations = logs.filter(l => l.action === 'RLS_VIOLATION').length;
     const screenersViewed = logs.filter(l => l.action === 'screener_viewed').length;
     const roleSwitches = logs.filter(l => l.action === 'role_switched').length;
-    return { total, dealsSigned, screenersViewed, roleSwitches };
+    return { total, dealsSigned, rlsViolations, screenersViewed, roleSwitches };
   }, [logs]);
 
   const getActionBadge = (action: AuditAction) => {
     switch (action) {
+      case 'RLS_VIOLATION':
+        return {
+          label: 'RLS VIOLATION (BLOCKED)',
+          bg: 'bg-rose-500/10 text-rose-700 border-rose-500/30 font-extrabold',
+          icon: <ShieldAlert size={13} className="text-rose-600 animate-pulse" />
+        };
       case 'deal_signed':
         return {
           label: 'DEAL SIGNED',
@@ -101,6 +108,12 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
           label: 'AUTH LOGIN',
           bg: 'bg-slate-500/10 text-slate-700 border-slate-500/30',
           icon: <Key size={13} className="text-slate-600" />
+        };
+      case 'asset_updated':
+        return {
+          label: 'STUDIO ASSET UPDATED',
+          bg: 'bg-amber-500/10 text-amber-700 border-amber-500/30',
+          icon: <Film size={13} className="text-amber-600" />
         };
       default:
         return {
@@ -190,14 +203,14 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
       </div>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3.5">
         <div className="p-4 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-1">
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-[10px] font-bold uppercase tracking-wider">Total Recorded Logs</span>
             <ShieldCheck size={16} className="text-blue-500" />
           </div>
           <div className="text-2xl font-black text-slate-900 tracking-tight">{stats.total}</div>
-          <p className="text-[11px] text-slate-500">Firestore database items</p>
+          <p className="text-[11px] text-slate-500">Firestore &amp; Supabase items</p>
         </div>
 
         <div className="p-4 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-1">
@@ -207,6 +220,21 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
           </div>
           <div className="text-2xl font-black text-emerald-600 tracking-tight">{stats.dealsSigned}</div>
           <p className="text-[11px] text-slate-500">Counter-signed contracts</p>
+        </div>
+
+        <div className={`p-4 rounded-2xl shadow-2xs space-y-1 border ${stats.rlsViolations > 0 ? 'bg-rose-50/70 border-rose-200' : 'bg-white border-slate-200'}`}>
+          <div className="flex items-center justify-between">
+            <span className={`text-[10px] font-bold uppercase tracking-wider ${stats.rlsViolations > 0 ? 'text-rose-700' : 'text-slate-400'}`}>
+              RLS Violations Blocked
+            </span>
+            <ShieldAlert size={16} className={stats.rlsViolations > 0 ? 'text-rose-600 animate-pulse' : 'text-slate-400'} />
+          </div>
+          <div className={`text-2xl font-black tracking-tight ${stats.rlsViolations > 0 ? 'text-rose-600' : 'text-slate-900'}`}>
+            {stats.rlsViolations}
+          </div>
+          <p className={`text-[11px] ${stats.rlsViolations > 0 ? 'text-rose-600 font-semibold' : 'text-slate-500'}`}>
+            {stats.rlsViolations > 0 ? 'Security breaches logged' : 'Zero policy violations'}
+          </p>
         </div>
 
         <div className="p-4 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-1">
@@ -251,11 +279,13 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
             className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
           >
             <option value="ALL">All Actions</option>
+            <option value="RLS_VIOLATION">🚨 RLS Violation (Security Alert)</option>
             <option value="deal_signed">Deal Signed</option>
             <option value="screener_viewed">Screener Viewed</option>
             <option value="role_switched">Role Switched</option>
             <option value="deal_proposed">Deal Proposed</option>
             <option value="screener_created">Screener Created</option>
+            <option value="asset_updated">Studio Asset Updated</option>
             <option value="user_login">Auth Login</option>
           </select>
         </div>
@@ -286,7 +316,7 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
             <p className="text-sm font-bold text-slate-800">No matching audit events found</p>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
               {logs.length === 0 
-                ? "Key user actions like signing deals, viewing screeners, and switching roles will be recorded here in real-time."
+                ? "Key user actions like signing deals, viewing screeners, switching roles, and blocked RLS violations will be recorded here in real-time."
                 : "Try adjusting your search criteria or resetting filters."}
             </p>
           </div>
@@ -296,9 +326,13 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
               const badge = getActionBadge(log.action);
               const isExpanded = expandedLogId === log.id;
               const formattedDate = new Date(log.timestamp).toLocaleString();
+              const isRlsViolation = log.action === 'RLS_VIOLATION';
 
               return (
-                <div key={log.id} className="transition-colors hover:bg-slate-50/70">
+                <div 
+                  key={log.id} 
+                  className={`transition-colors ${isRlsViolation ? 'bg-rose-50/30 border-l-4 border-l-rose-500 hover:bg-rose-50/50' : 'hover:bg-slate-50/70'}`}
+                >
                   <div 
                     onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
                     className="p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between gap-3 cursor-pointer"

@@ -109,6 +109,7 @@ export interface Notification {
 }
 
 export type AuditAction = 
+  | 'RLS_VIOLATION'
   | 'deal_signed' 
   | 'screener_viewed' 
   | 'role_switched' 
@@ -133,7 +134,7 @@ export interface AuditLog {
   role: UserRole;
   details: string;
   resourceId?: string;
-  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'auth' | 'ai_tool';
+  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'rights' | 'auth' | 'ai_tool' | string;
   metadata?: Record<string, any>;
   ipAddress?: string;
   timestamp: number;

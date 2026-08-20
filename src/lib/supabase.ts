@@ -482,6 +482,54 @@ export const supabaseInsertAuditLog = async (log: AuditLog): Promise<boolean> =>
   }
 };
 
+/**
+ * Triggers and records a dedicated 'RLS_VIOLATION' audit event in the Supabase audit trail.
+ * Captures user ID, target resource, timestamp, attempted operation, and violation metadata.
+ */
+export const supabaseLogRlsViolation = async (params: {
+  userId: string;
+  userEmail: string;
+  userName: string;
+  role: UserRole;
+  resourceId: string;
+  resourceType: 'deal' | 'contract' | 'screener' | 'asset' | 'rights' | 'auth' | string;
+  attemptedAction: string;
+  details: string;
+  metadata?: Record<string, any>;
+}): Promise<AuditLog> => {
+  const timestamp = Date.now();
+  const log: AuditLog = {
+    id: `rls-violation-${timestamp}-${Math.random().toString(36).substring(2, 7)}`,
+    action: 'RLS_VIOLATION',
+    userId: params.userId,
+    userEmail: params.userEmail,
+    userName: params.userName,
+    role: params.role,
+    resourceId: params.resourceId,
+    resourceType: params.resourceType,
+    details: params.details,
+    metadata: {
+      attemptedAction: params.attemptedAction,
+      violationType: 'UNAUTHORIZED_ACCESS_OR_MUTATION',
+      securityStatus: 'BLOCKED_AND_LOGGED',
+      ipAddress: 'kernel-enforced',
+      timestampIso: new Date(timestamp).toISOString(),
+      ...(params.metadata || {})
+    },
+    timestamp
+  };
+
+  try {
+    if (isSupabaseConfigured()) {
+      await supabaseInsertAuditLog(log);
+    }
+  } catch (err) {
+    console.warn('Supabase RLS violation audit write note:', err);
+  }
+
+  return log;
+};
+
 // Dedicated Row Level Security (RLS) SQL Script for Assets and Deals
 export const SUPABASE_RLS_POLICIES_SQL = `-- ==============================================================================
 -- STREAMVISTA ROW LEVEL SECURITY (RLS) POLICIES FOR ASSETS & DEALS

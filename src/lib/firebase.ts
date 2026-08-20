@@ -5,6 +5,7 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { AppUser, UserProfile, UserRole, AuditLog, AuditAction } from '../types';
+import { isSupabaseConfigured, supabaseInsertAuditLog } from './supabase';
 
 export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -193,7 +194,7 @@ export const getUserProfile = async (uid: string): Promise<UserProfile | null> =
 };
 
 /**
- * Log a compliance action to the Firebase-backed 'audit_logs' collection.
+ * Log a compliance or security action to both Firebase Firestore and Supabase PostgreSQL audit trails.
  */
 export const logAuditEvent = async (data: {
   action: AuditAction;
@@ -203,11 +204,12 @@ export const logAuditEvent = async (data: {
   role: UserRole;
   details: string;
   resourceId?: string;
-  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'auth' | 'ai_tool';
+  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'rights' | 'auth' | 'ai_tool' | string;
   metadata?: Record<string, any>;
 }): Promise<string> => {
-  const logId = `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-  const logPath = `audit_logs/${logId}`;
+  const logId = data.action === 'RLS_VIOLATION' 
+    ? `rls-violation-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+    : `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const logEntry: AuditLog = {
     id: logId,
     action: data.action,
@@ -222,14 +224,24 @@ export const logAuditEvent = async (data: {
     timestamp: Date.now()
   };
 
+  // 1. Write to Firebase Firestore
   try {
     const logDocRef = doc(db, 'audit_logs', logId);
     await setDoc(logDocRef, logEntry);
-    return logId;
   } catch (err) {
-    console.warn('Audit log write non-fatal warning:', err);
-    return logId;
+    console.warn('Firebase audit log write non-fatal warning:', err);
   }
+
+  // 2. Write to Supabase PostgreSQL audit trail if configured
+  try {
+    if (isSupabaseConfigured()) {
+      supabaseInsertAuditLog(logEntry).catch(e => console.warn('Supabase audit trail sync notice:', e));
+    }
+  } catch (err) {
+    console.warn('Supabase audit trail dispatch warning:', err);
+  }
+
+  return logId;
 };
 
 /**
