@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, Send, RefreshCw, LogOut, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User } from 'firebase/auth';
+import { AppUser } from '../types';
 
 interface GmailDashboardProps {
-  user: User | null;
+  user: AppUser | null;
   token: string | null;
   onLogout: () => void;
   composeTemplate?: {

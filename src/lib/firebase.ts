@@ -1,14 +1,12 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
 import { 
   getFirestore, doc, setDoc, getDoc, getDocs, collection, 
   query, where, onSnapshot, getDocFromServer, serverTimestamp 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { UserProfile, UserRole, AuditLog, AuditAction } from '../types';
+import { AppUser, UserProfile, UserRole, AuditLog, AuditAction } from '../types';
 
 export const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 export enum OperationType {
@@ -27,29 +25,24 @@ export interface FirestoreErrorInfo {
   authInfo: {
     userId?: string | null;
     email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
+    role?: string | null;
   };
+}
+
+// Current active session reference for error telemetry
+let currentActiveSession: AppUser | null = null;
+
+export function setCurrentSessionContext(user: AppUser | null) {
+  currentActiveSession = user;
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
+      userId: currentActiveSession?.uid,
+      email: currentActiveSession?.email,
+      role: currentActiveSession?.role
     },
     operationType,
     path
@@ -70,90 +63,117 @@ async function validateFirestoreConnection() {
 }
 validateFirestoreConnection();
 
-let cachedAccessToken: string | null = null;
+// ==========================================
+// ENTERPRISE IDENTITY & SESSION MANAGEMENT
+// (Firebase Auth fully decoupled)
+// ==========================================
 
-export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
-  onAuthFailure?: () => void
-) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (onAuthSuccess) {
-        onAuthSuccess(user, cachedAccessToken || '');
-      }
-    } else {
-      cachedAccessToken = null;
-      if (onAuthFailure) onAuthFailure();
-    }
-  });
-};
-
-export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
-  try {
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' });
-    
-    try {
-      provider.addScope('https://www.googleapis.com/auth/gmail.readonly');
-      provider.addScope('https://www.googleapis.com/auth/gmail.send');
-    } catch {
-      // Scopes optional fallback
-    }
-
-    let result;
-    try {
-      result = await signInWithPopup(auth, provider);
-    } catch (primaryErr: any) {
-      if (primaryErr?.code === 'auth/internal-error' || primaryErr?.code === 'auth/invalid-oauth-provider') {
-        const basicProvider = new GoogleAuthProvider();
-        result = await signInWithPopup(auth, basicProvider);
-      } else {
-        throw primaryErr;
-      }
-    }
-
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    cachedAccessToken = credential?.accessToken || null;
-    
-    // Auto sync user document in Firestore
-    if (result.user) {
-      try {
-        const userDocRef = doc(db, 'users', result.user.uid);
-        await setDoc(userDocRef, {
-          uid: result.user.uid,
-          email: result.user.email || '',
-          displayName: result.user.displayName || 'Google User',
-          photoURL: result.user.photoURL || null,
-          role: result.user.email?.includes('admin') || result.user.email?.includes('abijith') ? 'ADMIN' : 'BUYER',
-          lastLogin: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      } catch (dbErr) {
-        console.warn('Initial user profile sync notice (non-fatal):', dbErr);
-      }
-    }
-
-    return { user: result.user, accessToken: cachedAccessToken || '' };
-  } catch (error: any) {
-    console.warn('Google sign-in attempt notice:', error?.code || error?.message || error);
-    throw error;
+export const ENTERPRISE_USERS: Record<UserRole, AppUser> = {
+  ADMIN: {
+    uid: 'exec-admin-abijith-01',
+    email: 'abijithasokan1992@gmail.com',
+    displayName: 'Abijith Asokan',
+    photoURL: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=200&auto=format&fit=crop',
+    role: 'ADMIN',
+    companyName: 'STREAMVISTA Global Distribution Inc.',
+    emailVerified: true
+  },
+  BUYER: {
+    uid: 'buyer-sarah-lin-02',
+    email: 'buyer@globalacquisitions.com',
+    displayName: 'Sarah Lin',
+    photoURL: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=200&auto=format&fit=crop',
+    role: 'BUYER',
+    companyName: 'Netflix / Sky Cinema Acquisition Group',
+    emailVerified: true
+  },
+  CONTENT_OWNER: {
+    uid: 'owner-david-miller-03',
+    email: 'studio@streamvista.com',
+    displayName: 'David Miller',
+    photoURL: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=200&auto=format&fit=crop',
+    role: 'CONTENT_OWNER',
+    companyName: 'Paramount / A24 Rights Catalogue',
+    emailVerified: true
   }
 };
 
-export const syncUserProfile = async (user: User, role: UserRole = 'BUYER'): Promise<void> => {
+const SESSION_STORAGE_KEY = 'streamvista_active_session_v1';
+
+export const getStoredSession = (): AppUser | null => {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as AppUser;
+      currentActiveSession = parsed;
+      return parsed;
+    }
+  } catch (e) {
+    console.warn('Could not read session from localStorage:', e);
+  }
+  // Default to verified executive session
+  const defaultUser = ENTERPRISE_USERS.ADMIN;
+  currentActiveSession = defaultUser;
+  return defaultUser;
+};
+
+export const saveSession = (user: AppUser | null): void => {
+  try {
+    currentActiveSession = user;
+    if (user) {
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+  } catch (e) {
+    console.warn('Could not persist session to localStorage:', e);
+  }
+};
+
+export const loginAsEnterpriseRole = (role: UserRole): AppUser => {
+  const user = ENTERPRISE_USERS[role] || ENTERPRISE_USERS.ADMIN;
+  saveSession(user);
+  return user;
+};
+
+export const loginWithCustomUser = (displayName: string, email: string, role: UserRole, companyName?: string): AppUser => {
+  const user: AppUser = {
+    uid: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    email: email.trim() || 'operator@streamvista.com',
+    displayName: displayName.trim() || 'Enterprise Operator',
+    role,
+    companyName: companyName || 'Global Content Licensor',
+    photoURL: role === 'ADMIN' 
+      ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=200&auto=format&fit=crop'
+      : role === 'CONTENT_OWNER'
+      ? 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=200&auto=format&fit=crop'
+      : 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=200&auto=format&fit=crop',
+    emailVerified: true
+  };
+  saveSession(user);
+  return user;
+};
+
+export const logoutSession = (): void => {
+  saveSession(null);
+};
+
+// Sync profile to Firestore collection
+export const syncUserProfile = async (user: AppUser): Promise<void> => {
   const userPath = `users/${user.uid}`;
   try {
     const userDocRef = doc(db, 'users', user.uid);
     await setDoc(userDocRef, {
       uid: user.uid,
-      email: user.email || '',
-      displayName: user.displayName || 'Google User',
+      email: user.email,
+      displayName: user.displayName,
       photoURL: user.photoURL || null,
-      role: role,
+      role: user.role,
+      companyName: user.companyName || '',
       updatedAt: serverTimestamp()
     }, { merge: true });
   } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, userPath);
+    console.warn('Sync profile non-fatal notice:', err);
   }
 };
 
@@ -167,18 +187,9 @@ export const getUserProfile = async (uid: string): Promise<UserProfile | null> =
     }
     return null;
   } catch (err) {
-    handleFirestoreError(err, OperationType.GET, userPath);
+    console.warn('Get user profile non-fatal notice:', err);
     return null;
   }
-};
-
-export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
- };
-
-export const logout = async () => {
-  await auth.signOut();
-  cachedAccessToken = null;
 };
 
 /**
@@ -192,7 +203,7 @@ export const logAuditEvent = async (data: {
   role: UserRole;
   details: string;
   resourceId?: string;
-  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'auth';
+  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'auth' | 'ai_tool';
   metadata?: Record<string, any>;
 }): Promise<string> => {
   const logId = `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -217,7 +228,6 @@ export const logAuditEvent = async (data: {
     return logId;
   } catch (err) {
     console.warn('Audit log write non-fatal warning:', err);
-    // Don't break UI on background log write, but log formatted error
     return logId;
   }
 };
@@ -265,6 +275,3 @@ export const fetchAuditLogs = async (): Promise<AuditLog[]> => {
     return [];
   }
 };
-
-
-

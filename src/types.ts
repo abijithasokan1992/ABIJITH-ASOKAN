@@ -5,6 +5,16 @@
 
 export type UserRole = 'ADMIN' | 'CONTENT_OWNER' | 'BUYER';
 
+export interface AppUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL?: string | null;
+  role: UserRole;
+  companyName?: string;
+  emailVerified?: boolean;
+}
+
 export interface UserProfile {
   uid: string;
   email: string;
@@ -106,8 +116,13 @@ export type AuditAction =
   | 'deal_approved' 
   | 'deal_rejected' 
   | 'screener_created' 
+  | 'asset_updated'
+  | 'asset_created'
+  | 'asset_deleted'
   | 'user_login' 
-  | 'user_logout';
+  | 'user_logout'
+  | 'copilot_query'
+  | 'ai_generation';
 
 export interface AuditLog {
   id: string;
@@ -118,7 +133,7 @@ export interface AuditLog {
   role: UserRole;
   details: string;
   resourceId?: string;
-  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'auth';
+  resourceType?: 'deal' | 'contract' | 'screener' | 'asset' | 'auth' | 'ai_tool';
   metadata?: Record<string, any>;
   ipAddress?: string;
   timestamp: number;

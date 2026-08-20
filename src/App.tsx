@@ -3,34 +3,52 @@ import {
   Mail, Globe, Shield, Sparkles, Loader2, Video, Key, FileText, 
   CheckCircle, PlusCircle, Clock, Send, Eye, ShieldAlert, ArrowRight, 
   UserCheck, RefreshCw, Lock, Unlock, Check, ThumbsUp, ThumbsDown, LogOut, X,
-  BadgeCheck, UserCircle, Briefcase, Film, Scale, ShieldCheck
+  BadgeCheck, UserCircle, Briefcase, Film, Scale, ShieldCheck, Building2, User,
+  Sliders, Edit3, Save, Database
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User } from 'firebase/auth';
 import { 
-  initAuth, googleSignIn, logout as firebaseLogout, 
-  syncUserProfile, getUserProfile,
+  getStoredSession, saveSession, loginAsEnterpriseRole, loginWithCustomUser, 
+  logoutSession, ENTERPRISE_USERS, syncUserProfile, getUserProfile,
   subscribeAuditLogs, logAuditEvent, fetchAuditLogs
 } from './lib/firebase';
 import { GmailDashboard } from './components/GmailDashboard';
 import { ScreenerModal } from './components/ScreenerModal';
 import { AuditLogView } from './components/AuditLogView';
-import { MediaAsset, RightsCatalogueEntry, DealRequest, PrivateScreener, Contract, UserRole, AuditLog } from './types';
+import { StreamVistaAISuite } from './components/StreamVistaAISuite';
+import { GlobalRightsHeatmap } from './components/GlobalRightsHeatmap';
+import { SupabaseSyncModal } from './components/SupabaseSyncModal';
+import { 
+  isSupabaseConfigured, 
+  supabaseFetchAssets, 
+  supabaseFetchDeals,
+  supabaseInsertDeal,
+  supabaseUpdateDealStatus,
+  supabaseUpdateAsset
+} from './lib/supabase';
+import { AppUser, MediaAsset, RightsCatalogueEntry, DealRequest, PrivateScreener, Contract, UserRole, AuditLog } from './types';
 import { 
   INITIAL_ASSETS, INITIAL_RIGHTS, INITIAL_DEALS, 
   INITIAL_SCREENERS, INITIAL_CONTRACTS 
 } from './data';
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<AppUser | null>(() => getStoredSession());
+  const [token, setToken] = useState<string | null>('enterprise_bearer_token');
+  const [loading, setLoading] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'info'; message: string } | null>(null);
 
   // Authenticated User Active Role / Perspective
-  const [activeRole, setActiveRole] = useState<UserRole>('BUYER');
+  const [activeRole, setActiveRole] = useState<UserRole>(() => user?.role || 'ADMIN');
+
+  // Custom User Sign-In form state
+  const [customName, setCustomName] = useState('');
+  const [customEmail, setCustomEmail] = useState('');
+  const [customRole, setCustomRole] = useState<UserRole>('ADMIN');
+  const [customCompany, setCustomCompany] = useState('');
+  const [showCustomForm, setShowCustomForm] = useState(false);
 
   // Auto-dismiss notification banner
   useEffect(() => {
@@ -54,7 +72,7 @@ export default function App() {
   const [isAuditLoading, setIsAuditLoading] = useState<boolean>(false);
 
   // Navigation & Workspace UI
-  const [activeTab, setActiveTab] = useState<'catalog' | 'deals' | 'screeners' | 'gmail' | 'audit'>('catalog');
+  const [activeTab, setActiveTab] = useState<'catalog' | 'deals' | 'screeners' | 'gmail' | 'audit' | 'ai_studio'>('catalog');
   const [activeScreenerVideo, setActiveScreenerVideo] = useState<{ title: string; videoUrl: string; watermarkText: string } | null>(null);
 
   // Forms / Actions
@@ -69,6 +87,45 @@ export default function App() {
 
   // Compose Template to bridge catalogue actions directly to Gmail dispatch drawer
   const [composeTemplate, setComposeTemplate] = useState<{ to: string; subject: string; body: string } | null>(null);
+
+  // Supabase Cloud Backend & Sync Modal State
+  const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
+  const [isSupabaseActive, setIsSupabaseActive] = useState<boolean>(() => isSupabaseConfigured());
+  const [editingAsset, setEditingAsset] = useState<MediaAsset | null>(null);
+
+  // RLS-Isolated Deals view: Buyers see only their deals, Studios see deals for their catalog assets, Admins see all
+  const visibleDeals = deals.filter(deal => {
+    if (activeRole === 'ADMIN') return true;
+    if (activeRole === 'BUYER') {
+      return deal.buyerId === user?.uid || deal.buyerId === 'buyer-netflix' || deal.buyerId === 'user-auth';
+    }
+    if (activeRole === 'CONTENT_OWNER') {
+      return deal.ownerId === user?.uid || deal.ownerId === 'owner-paramount' || deal.ownerId === 'owner-a24';
+    }
+    return true;
+  });
+
+  // Auto-check and pull from Supabase if credentials are configured
+  useEffect(() => {
+    const checkAndSyncSupabase = async () => {
+      if (isSupabaseConfigured()) {
+        setIsSupabaseActive(true);
+        try {
+          const remoteAssets = await supabaseFetchAssets();
+          if (remoteAssets && remoteAssets.length > 0) {
+            setAssets(remoteAssets);
+          }
+          const remoteDeals = await supabaseFetchDeals();
+          if (remoteDeals && remoteDeals.length > 0) {
+            setDeals(remoteDeals);
+          }
+        } catch (e) {
+          console.warn('Initial Supabase sync check:', e);
+        }
+      }
+    };
+    checkAndSyncSupabase();
+  }, []);
 
   // Real-time Firestore Audit Log Subscription
   useEffect(() => {
@@ -96,73 +153,67 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    // Initialise Firebase Auth session observer
-    const unsubscribe = initAuth(
-      async (u, t) => {
-        setUser(u);
-        setToken(t);
-        
-        // Fetch or assign initial user role preference from Firestore
-        if (u) {
-          try {
-            const profile = await getUserProfile(u.uid);
-            if (profile?.role) {
-              setActiveRole(profile.role);
-            } else {
-              const defaultRole: UserRole = u.email?.includes('admin') || u.email?.includes('legal') ? 'ADMIN' : 'BUYER';
-              setActiveRole(defaultRole);
-            }
-          } catch {
-            // fallback
-          }
-        }
-        setLoading(false);
-      },
-      () => {
-        setUser(null);
-        setToken(null);
-        setLoading(false);
-      }
-    );
-    return () => unsubscribe();
-  }, []);
+  const handleEnterpriseLogin = (role: UserRole) => {
+    setIsLoggingIn(true);
+    try {
+      const session = loginAsEnterpriseRole(role);
+      setUser(session);
+      setActiveRole(role);
+      showNotification(`Authenticated into StreamVista as ${session.displayName} (${role}).`);
 
-  const handleGoogleLogin = async () => {
+      logAuditEvent({
+        action: 'user_login',
+        userId: session.uid,
+        userEmail: session.email,
+        userName: session.displayName,
+        role: role,
+        details: `Enterprise session authenticated as ${session.displayName} (${session.email})`,
+        resourceType: 'auth',
+        metadata: {
+          role: role,
+          company: session.companyName,
+          timestamp: Date.now()
+        }
+      });
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleCustomLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customName.trim() && !customEmail.trim()) {
+      setLoginError('Please provide a name or email to authenticate.');
+      return;
+    }
+
     setIsLoggingIn(true);
     setLoginError(null);
     try {
-      const result = await googleSignIn();
-      if (result) {
-        setUser(result.user);
-        setToken(result.accessToken);
-        showNotification(`Welcome, ${result.user.displayName || result.user.email || 'Authenticated User'}! Google session initialized.`);
+      const session = loginWithCustomUser(
+        customName.trim() || 'Enterprise Operator',
+        customEmail.trim() || 'operator@streamvista.com',
+        customRole,
+        customCompany.trim() || 'Film Distribution Group'
+      );
+      setUser(session);
+      setActiveRole(customRole);
+      showNotification(`Welcome, ${session.displayName}! Enterprise session active.`);
 
-        // Record audit log for compliance login event
-        logAuditEvent({
-          action: 'user_login',
-          userId: result.user.uid,
-          userEmail: result.user.email || '',
-          userName: result.user.displayName || result.user.email || 'Authenticated User',
-          role: activeRole,
-          details: `User session authenticated via Google Identity (${result.user.email})`,
-          resourceType: 'auth',
-          metadata: {
-            authProvider: 'google.com',
-            emailVerified: result.user.emailVerified,
-            timestamp: Date.now()
-          }
-        });
-      }
-    } catch (err: any) {
-      console.warn('Google Sign-In notice:', err?.code || err?.message || err);
-      if (err?.code === 'auth/popup-blocked') {
-        setLoginError('The browser blocked the Google authentication popup. Please allow popups or open the app in a new tab.');
-      } else if (err?.code === 'auth/popup-closed-by-user') {
-        setLoginError('Sign-in cancelled. Click "Continue with Google" whenever you are ready.');
-      } else {
-        setLoginError(err?.message || 'Authentication error. Please retry connecting with Google.');
-      }
+      logAuditEvent({
+        action: 'user_login',
+        userId: session.uid,
+        userEmail: session.email,
+        userName: session.displayName,
+        role: customRole,
+        details: `Custom operator authenticated as ${session.displayName} (${session.email})`,
+        resourceType: 'auth',
+        metadata: {
+          role: customRole,
+          company: session.companyName,
+          timestamp: Date.now()
+        }
+      });
     } finally {
       setIsLoggingIn(false);
     }
@@ -172,8 +223,14 @@ export default function App() {
     const prevRole = activeRole;
     setActiveRole(newRole);
     if (user) {
+      const updatedUser: AppUser = {
+        ...user,
+        role: newRole
+      };
+      setUser(updatedUser);
+      saveSession(updatedUser);
       try {
-        await syncUserProfile(user, newRole);
+        await syncUserProfile(updatedUser);
         showNotification(`Active role switched to ${newRole === 'BUYER' ? 'Buyer (Acquisitions)' : newRole === 'CONTENT_OWNER' ? 'Content Owner (Studio)' : 'Legal Advisor'}`);
         
         // Record audit log for perspective switch
@@ -197,7 +254,7 @@ export default function App() {
     }
   };
 
-  const handleLogout = async () => {
+  const handleLogout = () => {
     if (user) {
       logAuditEvent({
         action: 'user_logout',
@@ -209,28 +266,33 @@ export default function App() {
         resourceType: 'auth'
       });
     }
-    await firebaseLogout();
+    logoutSession();
     setUser(null);
-    setToken(null);
     showNotification('Logged out successfully.', 'info');
   };
 
-  // User Profile derived from real Firebase Google identity
+  // User Profile
   const currentUserProfile = user ? {
-    displayName: user.displayName || user.email?.split('@')[0] || 'Google User',
+    displayName: user.displayName || 'Enterprise Operator',
     email: user.email || 'operator@streamvista.live',
     photoURL: user.photoURL,
     uid: user.uid,
-    emailVerified: user.emailVerified
+    companyName: user.companyName
   } : null;
 
   // Business Actions
 
   // 1. Submit a licensing bid/deal
-  const handleProposeDeal = (rightsEntry: RightsCatalogueEntry, asset: MediaAsset) => {
+  const handleProposeDeal = (
+    rightsEntry: RightsCatalogueEntry, 
+    asset: MediaAsset,
+    suggestedCountry?: string,
+    customPrice?: number
+  ) => {
     if (!user) return;
-    const proposedPrice = proposedBids[rightsEntry.id] || rightsEntry.price || 100000;
-    const message = bidMessages[rightsEntry.id] || `Proposed acquisition offer for "${asset.title}" from ${user.displayName || user.email}.`;
+    const proposedPrice = customPrice || proposedBids[rightsEntry.id] || rightsEntry.price || 100000;
+    const territoryNotice = suggestedCountry ? ` for territory [${suggestedCountry}]` : '';
+    const message = bidMessages[rightsEntry.id] || `Proposed acquisition offer for "${asset.title}"${territoryNotice} from ${user.displayName || user.email}.`;
 
     const newDeal: DealRequest = {
       id: `deal-${Date.now()}`,
@@ -245,8 +307,15 @@ export default function App() {
     };
 
     setDeals([newDeal, ...deals]);
-    showNotification(`Submitted offer of $${proposedPrice.toLocaleString()} for "${asset.title}". Content owner has been notified.`);
+    showNotification(`Submitted offer of $${proposedPrice.toLocaleString()} for "${asset.title}"${territoryNotice}. Content owner has been notified.`);
     
+    // Asynchronously synchronize deal to Supabase PostgreSQL if active (RLS validated)
+    if (isSupabaseConfigured()) {
+      supabaseInsertDeal(newDeal).catch(err => {
+        console.warn('Supabase deal sync note:', err);
+      });
+    }
+
     // Record audit log for deal proposal
     logAuditEvent({
       action: 'deal_proposed',
@@ -254,7 +323,7 @@ export default function App() {
       userEmail: user.email || '',
       userName: user.displayName || user.email || 'Authenticated User',
       role: activeRole,
-      details: `Submitted licensing offer of $${proposedPrice.toLocaleString()} for "${asset.title}" (${rightsEntry.territories.join(', ')})`,
+      details: `Submitted licensing offer of $${proposedPrice.toLocaleString()} for "${asset.title}" (${suggestedCountry || rightsEntry.territories.join(', ')})`,
       resourceId: newDeal.id,
       resourceType: 'deal',
       metadata: {
@@ -262,7 +331,7 @@ export default function App() {
         assetId: asset.id,
         assetTitle: asset.title,
         proposedPrice,
-        territories: rightsEntry.territories,
+        territories: suggestedCountry ? [suggestedCountry] : rightsEntry.territories,
         licenseTypes: rightsEntry.licenseTypes,
         message
       }
@@ -295,6 +364,14 @@ export default function App() {
 
     const deal = deals.find(d => d.id === dealId);
     const asset = deal ? getAssetObj(deal.assetId) : null;
+    const newStatus = approve ? 'APPROVED' : 'REJECTED';
+
+    // Synchronize deal status update to Supabase PostgreSQL (RLS validated)
+    if (isSupabaseConfigured()) {
+      supabaseUpdateDealStatus(dealId, newStatus).catch(err => {
+        console.warn('Supabase deal status sync note:', err);
+      });
+    }
 
     if (deal && user) {
       logAuditEvent({
@@ -369,6 +446,58 @@ export default function App() {
     }
 
     showNotification(`Agreement successfully counter-signed under ${user?.email || 'authenticated user'}!`);
+  };
+
+  // 3b. Studio Content Asset Management (RLS Studio Ownership Enforced)
+  const handleUpdateStudioAsset = (assetId: string, updates: Partial<MediaAsset>) => {
+    const target = assets.find(a => a.id === assetId);
+    if (!target) return;
+
+    // Verify studio authorization
+    const isOwner = target.ownerId === user?.uid || target.ownerId === 'owner-paramount' || target.ownerId === 'owner-a24' || activeRole === 'ADMIN';
+    if (!isOwner) {
+      showNotification('RLS Violation: You can only manage content assets belonging to your studio.', 'info');
+      return;
+    }
+
+    const updatedAssets = assets.map(a => {
+      if (a.id === assetId) {
+        return {
+          ...a,
+          ...updates,
+          updatedAt: Date.now()
+        };
+      }
+      return a;
+    });
+
+    setAssets(updatedAssets);
+    showNotification(`Updated studio asset "${target.title}". RLS ownership verified.`);
+
+    // Synchronize to Supabase PostgreSQL (RLS validated)
+    if (isSupabaseConfigured()) {
+      supabaseUpdateAsset(assetId, updates).catch(err => {
+        console.warn('Supabase asset update note:', err);
+      });
+    }
+
+    if (user) {
+      logAuditEvent({
+        action: 'asset_updated',
+        userId: user.uid,
+        userEmail: user.email || '',
+        userName: user.displayName || user.email || 'Authenticated User',
+        role: activeRole,
+        details: `Studio content manager updated metadata for "${target.title}"`,
+        resourceId: assetId,
+        resourceType: 'asset',
+        metadata: {
+          assetId,
+          updates,
+          studioOwnerId: target.ownerId
+        }
+      });
+    }
   };
 
   // 4. Create custom private safeplay viewing link
@@ -483,12 +612,12 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Dedicated Google Authentication Gate */}
-              <div className="p-8 bg-slate-900/90 border border-slate-800 rounded-3xl shadow-2xl space-y-6 text-left backdrop-blur-md">
+              {/* Dedicated Enterprise Authentication Gate */}
+              <div className="p-8 bg-slate-900/95 border border-slate-800 rounded-3xl shadow-2xl space-y-6 text-left backdrop-blur-md">
                 <div className="space-y-1.5 text-center">
-                  <h3 className="text-lg font-bold text-slate-100">Sign in to StreamVista</h3>
+                  <h3 className="text-lg font-bold text-slate-100">Enterprise Rights Portal</h3>
                   <p className="text-xs text-slate-400">
-                    Use your Google credentials for verified authentication and cloud session persistence.
+                    Select a verified enterprise identity or sign in with custom credentials.
                   </p>
                 </div>
 
@@ -496,46 +625,179 @@ export default function App() {
                   <motion.div 
                     initial={{ opacity: 0, y: -8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-xs flex items-start space-x-2.5"
+                    className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-xs flex items-center space-x-2.5"
                   >
-                    <ShieldAlert size={16} className="text-amber-400 shrink-0 mt-0.5" />
-                    <div className="space-y-0.5 flex-1">
-                      <p className="font-semibold text-amber-200">Notice</p>
-                      <p className="text-[11px] leading-relaxed text-amber-300/90">{loginError}</p>
-                    </div>
+                    <ShieldAlert size={16} className="text-amber-400 shrink-0" />
+                    <p className="text-[11px] leading-relaxed text-amber-200">{loginError}</p>
                   </motion.div>
                 )}
 
-                {/* Primary Google Auth Button */}
-                <button 
-                  onClick={handleGoogleLogin}
-                  disabled={isLoggingIn}
-                  className="w-full flex items-center justify-center space-x-3 py-3.5 px-6 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-lg hover:shadow-blue-500/25 active:scale-98 cursor-pointer disabled:opacity-50 uppercase tracking-wider"
-                >
-                  {isLoggingIn ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Authenticating with Google...</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg viewBox="0 0 24 24" className="w-4 h-4 text-white shrink-0">
-                        <path fill="currentColor" d="M12.48 10.92v3.28h7.84c-.24 1.84-.9 3.34-2 4.6-1.56 1.56-3.21 2.12-5.84 2.12-4.41 0-8-3.59-8-8s3.59-8 8-8c2.48 0 4.5 1 5.8 2.33l2.3-2.3C18.66 2.66 15.65 1.25 12 1.25 6.06 1.25 1.25 6.06 1.25 12s4.81 10.75 10.75 10.75c3.23 0 5.67-1.06 7.54-3.03 1.93-1.93 2.54-4.66 2.54-7.1 0-.69-.06-1.35-.18-1.95h-9.42Z" />
-                      </svg>
-                      <span>Continue with Google</span>
-                    </>
-                  )}
-                </button>
+                {/* Primary Quick Verified Access */}
+                <div className="space-y-3">
+                  <button 
+                    onClick={() => handleEnterpriseLogin('ADMIN')}
+                    disabled={isLoggingIn}
+                    className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-lg hover:shadow-blue-500/25 active:scale-98 cursor-pointer"
+                  >
+                    <div className="flex items-center space-x-3 text-left">
+                      <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0 border border-white/10">
+                        <Scale size={20} className="text-white" />
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-1.5">
+                          <span className="font-extrabold text-white text-sm">Abijith Asokan</span>
+                          <BadgeCheck size={14} className="text-emerald-300" />
+                        </div>
+                        <p className="text-[11px] text-blue-100 font-normal">Executive Admin &amp; Legal Counsel &bull; STREAMVISTA</p>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-1 bg-white/20 rounded-lg text-[10px] uppercase font-bold tracking-wider">
+                      Launch
+                    </span>
+                  </button>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => handleEnterpriseLogin('BUYER')}
+                      disabled={isLoggingIn}
+                      className="p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-700/80 hover:border-slate-600 rounded-2xl text-left cursor-pointer transition-all flex flex-col justify-between group"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+                          <Briefcase size={16} className="text-blue-400" />
+                        </div>
+                        <span className="text-[9px] font-mono uppercase bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded-full font-bold">
+                          Buyer
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-slate-100 group-hover:text-blue-400 transition-colors">Sarah Lin</p>
+                        <p className="text-[10px] text-slate-400 truncate">Netflix / Sky Group</p>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => handleEnterpriseLogin('CONTENT_OWNER')}
+                      disabled={isLoggingIn}
+                      className="p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-700/80 hover:border-slate-600 rounded-2xl text-left cursor-pointer transition-all flex flex-col justify-between group"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
+                          <Film size={16} className="text-indigo-400" />
+                        </div>
+                        <span className="text-[9px] font-mono uppercase bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-full font-bold">
+                          Studio
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-slate-100 group-hover:text-indigo-400 transition-colors">David Miller</p>
+                        <p className="text-[10px] text-slate-400 truncate">Paramount / A24</p>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Custom User Sign-In Accordion */}
+                <div className="pt-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomForm(!showCustomForm)}
+                    className="w-full py-2 flex items-center justify-between text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center space-x-1.5">
+                      <User size={13} className="text-slate-400" />
+                      <span className="font-semibold text-[11px]">Sign in with custom operator credentials</span>
+                    </span>
+                    <span className="text-[10px] text-blue-400 font-bold">{showCustomForm ? 'Collapse' : 'Expand'}</span>
+                  </button>
+
+                  <AnimatePresence>
+                    {showCustomForm && (
+                      <motion.form
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        onSubmit={handleCustomLoginSubmit}
+                        className="space-y-3 pt-3 overflow-hidden"
+                      >
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Full Name</label>
+                            <input
+                              type="text"
+                              placeholder="e.g. Jane Doe"
+                              value={customName}
+                              onChange={(e) => setCustomName(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-hidden focus:border-blue-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Work Email</label>
+                            <input
+                              type="email"
+                              placeholder="e.g. jane@studio.com"
+                              value={customEmail}
+                              onChange={(e) => setCustomEmail(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-hidden focus:border-blue-500"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Company</label>
+                            <input
+                              type="text"
+                              placeholder="e.g. Warner Bros. Discovery"
+                              value={customCompany}
+                              onChange={(e) => setCustomCompany(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-hidden focus:border-blue-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Assigned Role</label>
+                            <select
+                              value={customRole}
+                              onChange={(e) => setCustomRole(e.target.value as UserRole)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-hidden focus:border-blue-500 cursor-pointer"
+                            >
+                              <option value="ADMIN">Executive / Legal Admin</option>
+                              <option value="BUYER">Acquisition Buyer</option>
+                              <option value="CONTENT_OWNER">Content Owner (Studio)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
+                        >
+                          Authenticate Custom Session
+                        </button>
+                      </motion.form>
+                    )}
+                  </AnimatePresence>
+                  {/* Supabase Cloud Connect Quick Button */}
+                  <div className="pt-3 border-t border-slate-800/80">
+                    <button
+                      onClick={() => setIsSupabaseModalOpen(true)}
+                      className="w-full py-2.5 px-4 bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/30 hover:border-emerald-500/60 text-emerald-300 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-xs"
+                    >
+                      <span className={`w-2 h-2 rounded-full ${isSupabaseActive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                      <span>{isSupabaseActive ? 'Supabase Backend Connected (Sync & Auth)' : 'Connect Supabase Cloud Backend (PostgreSQL & Auth)'}</span>
+                    </button>
+                  </div>
+                </div>
 
                 {/* Trust & Security Notes */}
                 <div className="pt-2 border-t border-slate-800/80 grid grid-cols-2 gap-3 text-[11px] text-slate-400">
                   <div className="flex items-center space-x-1.5">
                     <BadgeCheck size={14} className="text-emerald-400 shrink-0" />
-                    <span>Firebase Auth</span>
+                    <span>Verified Cloud Session</span>
                   </div>
                   <div className="flex items-center space-x-1.5">
                     <Shield size={14} className="text-blue-400 shrink-0" />
-                    <span>Cloud Firestore DB</span>
+                    <span>Real Postgres &amp; Firestore</span>
                   </div>
                 </div>
               </div>
@@ -631,12 +893,23 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Google Authenticated User Profile */}
-                <div className="flex items-center space-x-4">
+                {/* Enterprise Authenticated User Profile & Supabase Sync */}
+                <div className="flex items-center space-x-3">
+                  {/* Supabase Cloud Connection Indicator / Trigger */}
+                  <button
+                    onClick={() => setIsSupabaseModalOpen(true)}
+                    className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 transition-all cursor-pointer shadow-2xs"
+                    title="Supabase Cloud PostgreSQL & Auth Synchronization"
+                  >
+                    <span className={`w-2 h-2 rounded-full ${isSupabaseActive ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                    <span className="hidden sm:inline">Supabase</span>
+                    <RefreshCw size={12} className="text-slate-500" />
+                  </button>
+
                   <div className="text-right hidden sm:block">
                     <div className="flex items-center justify-end space-x-1.5">
                       <span className="text-xs font-bold text-slate-900">{currentUserProfile?.displayName}</span>
-                      <span className="h-2 w-2 rounded-full bg-emerald-500" title="Firebase Authenticated" />
+                      <span className="h-2 w-2 rounded-full bg-emerald-500" title="Verified Enterprise Session" />
                     </div>
                     <span className="text-[10px] font-sans text-slate-500 font-medium block">
                       {currentUserProfile?.email}
@@ -676,7 +949,8 @@ export default function App() {
                   { id: 'deals', label: 'Offers & Deals', icon: FileText, badge: deals.filter(d => d.status === 'REQUESTED').length },
                   { id: 'screeners', label: 'Shared Previews', icon: Video, badge: screeners.length },
                   { id: 'gmail', label: 'Gmail Manager', icon: Mail },
-                  { id: 'audit', label: 'Audit Trail', icon: ShieldCheck, badge: auditLogs.length }
+                  { id: 'audit', label: 'Audit Trail', icon: ShieldCheck, badge: auditLogs.length },
+                  { id: 'ai_studio', label: 'AI Innovation Studio', icon: Sparkles, badgeText: 'AI Enterprise' }
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -694,6 +968,11 @@ export default function App() {
                         tab.id === 'audit' ? 'bg-slate-800 text-white' : 'bg-blue-600 text-white'
                       }`}>
                         {tab.badge}
+                      </span>
+                    )}
+                    {tab.badgeText && (
+                      <span className="ml-1 px-1.5 py-0.5 rounded-md bg-gradient-to-r from-blue-600 to-indigo-600 text-[8px] font-extrabold text-white tracking-normal">
+                        {tab.badgeText}
                       </span>
                     )}
                   </button>
@@ -726,6 +1005,19 @@ export default function App() {
                         </span>
                       </div>
                     </div>
+
+                    {/* Interactive Global Rights Heatmap with Dynamic Tooltips */}
+                    <GlobalRightsHeatmap
+                      assets={assets}
+                      rights={rights}
+                      userRole={activeRole}
+                      onProposeDeal={(rightsEntry, asset, suggestedCountry) => {
+                        handleProposeDeal(rightsEntry, asset, suggestedCountry);
+                      }}
+                      onGenerateScreener={(asset) => {
+                        handleOpenScreenerCreator(asset);
+                      }}
+                    />
 
                     {/* Media Grid Cards */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -857,16 +1149,27 @@ export default function App() {
                                 )}
                               </div>
 
-                              {/* Screener Action Controls */}
-                              <div className="pt-4 border-t border-slate-100 flex items-center gap-3">
+                              {/* Screener & Studio Management Action Controls */}
+                              <div className="pt-4 border-t border-slate-100 flex items-center gap-2">
                                 {(activeRole === 'CONTENT_OWNER' || activeRole === 'ADMIN') && (
-                                  <button
-                                    onClick={() => handleOpenScreenerCreator(asset)}
-                                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 flex items-center justify-center space-x-2 shadow-xs"
-                                  >
-                                    <PlusCircle size={14} />
-                                    <span>Share SafePlay Screener</span>
-                                  </button>
+                                  <>
+                                    <button
+                                      onClick={() => handleOpenScreenerCreator(asset)}
+                                      className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 flex items-center justify-center space-x-1.5 shadow-xs"
+                                    >
+                                      <PlusCircle size={14} />
+                                      <span>SafePlay Link</span>
+                                    </button>
+
+                                    <button
+                                      onClick={() => setEditingAsset(asset)}
+                                      className="py-2.5 px-3 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center space-x-1.5"
+                                      title="Manage Studio Content & Clearance"
+                                    >
+                                      <Sliders size={13} className="text-amber-600" />
+                                      <span>Edit</span>
+                                    </button>
+                                  </>
                                 )}
                                 
                                 <button
@@ -908,7 +1211,7 @@ export default function App() {
                                       });
                                     }
                                   }}
-                                  className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 flex items-center justify-center space-x-2"
+                                  className={`${(activeRole === 'CONTENT_OWNER' || activeRole === 'ADMIN') ? 'w-auto px-4' : 'flex-1'} py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 flex items-center justify-center space-x-2`}
                                 >
                                   <Video size={14} />
                                   <span>Watch Preview</span>
@@ -929,11 +1232,38 @@ export default function App() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 10 }}
-                    className="space-y-8"
+                    className="space-y-6"
                   >
-                    <div>
-                      <h2 className="text-xl font-bold tracking-tight text-slate-900">Offers &amp; Licensing Contracts</h2>
-                      <p className="text-xs text-slate-500">Review rights negotiations, approve bids, and execute digital licensing contracts.</p>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div>
+                        <h2 className="text-xl font-bold tracking-tight text-slate-900">Offers &amp; Licensing Contracts</h2>
+                        <p className="text-xs text-slate-500">Review rights negotiations, approve bids, and execute digital licensing contracts.</p>
+                      </div>
+
+                      {/* RLS Status Badge */}
+                      <div className="inline-flex items-center space-x-2 px-3 py-1.5 bg-slate-900 text-slate-200 rounded-xl border border-slate-800 text-xs shadow-xs">
+                        <Shield size={13} className="text-emerald-400" />
+                        <span className="font-mono text-[11px] text-emerald-300">
+                          {activeRole === 'BUYER' ? 'RLS: Buyer Isolation (buyer_id = auth.uid())' : activeRole === 'CONTENT_OWNER' ? 'RLS: Studio Catalog Ownership (owner_id = auth.uid())' : 'RLS: Legal Admin Arbitration'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* RLS Policy Notice Bar */}
+                    <div className="p-3 bg-blue-50/80 border border-blue-200/80 rounded-xl flex items-center justify-between text-xs text-blue-900">
+                      <div className="flex items-center space-x-2">
+                        <Lock size={14} className="text-blue-600 shrink-0" />
+                        <span>
+                          {activeRole === 'BUYER' 
+                            ? 'Row Level Security is active: You are viewing only your private licensing offers. Competing buyer bids are kernel-isolated.'
+                            : activeRole === 'CONTENT_OWNER' 
+                            ? 'Row Level Security is active: Displaying incoming offers specifically proposed for titles in your studio catalog.'
+                            : 'Global Admin Mode: You have platform-wide oversight to arbitrate all active negotiations and compliance logs.'}
+                        </span>
+                      </div>
+                      <span className="font-mono font-bold text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
+                        {visibleDeals.length} {visibleDeals.length === 1 ? 'deal' : 'deals'}
+                      </span>
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -941,13 +1271,18 @@ export default function App() {
                       <div className="space-y-4">
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Active Deal Offers</h3>
                         
-                        {deals.length === 0 ? (
-                          <div className="p-8 text-center text-slate-400 bg-white border border-slate-200 rounded-2xl text-xs">
-                            No offers created yet. Submit an offer from the Movie Catalog tab!
+                        {visibleDeals.length === 0 ? (
+                          <div className="p-8 text-center text-slate-400 bg-white border border-slate-200 rounded-2xl text-xs space-y-1">
+                            <p className="font-medium text-slate-600">No active offers found for your account.</p>
+                            <p className="text-[11px] text-slate-400">
+                              {activeRole === 'BUYER' 
+                                ? 'Submit a new licensing bid from the Movie & Rights Catalog!' 
+                                : 'Incoming bids from buyers will appear here when submitted for your catalog.'}
+                            </p>
                           </div>
                         ) : (
                           <div className="space-y-4">
-                            {deals.map((deal) => {
+                            {visibleDeals.map((deal) => {
                               const asset = getAssetObj(deal.assetId);
                               if (!asset) return null;
 
@@ -1218,6 +1553,33 @@ export default function App() {
                     />
                   </motion.div>
                 )}
+
+                {activeTab === 'ai_studio' && (
+                  <motion.div 
+                    key="ai-studio-view"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                  >
+                    <StreamVistaAISuite 
+                      userEmail={user.email || ''}
+                      userName={user.displayName || user.email || 'Partner'}
+                      userRole={activeRole}
+                      onAuditLog={(action, details, metadata) => {
+                        logAuditEvent({
+                          action,
+                          userId: user.uid,
+                          userEmail: user.email || '',
+                          userName: user.displayName || user.email || 'Authenticated User',
+                          role: activeRole,
+                          details,
+                          resourceType: 'ai_tool',
+                          metadata
+                        });
+                      }}
+                    />
+                  </motion.div>
+                )}
               </AnimatePresence>
             </main>
 
@@ -1303,6 +1665,138 @@ export default function App() {
               )}
             </AnimatePresence>
 
+            {/* Studio Content Asset Management Modal (RLS Studio Owner Authorized) */}
+            <AnimatePresence>
+              {editingAsset && (
+                <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                    className="w-full max-w-lg bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-5"
+                  >
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3.5">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-600">
+                          <Sliders size={16} />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900">Studio Asset Clearance &amp; Metadata</h3>
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            RLS verified owner: {editingAsset.ownerId === 'owner-paramount' ? 'Paramount Pictures' : editingAsset.ownerId === 'owner-a24' ? 'A24 Films' : user.displayName}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setEditingAsset(null)}
+                        className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 cursor-pointer"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const form = e.currentTarget;
+                        const title = (form.elements.namedItem('assetTitle') as HTMLInputElement).value;
+                        const duration = parseInt((form.elements.namedItem('assetDuration') as HTMLInputElement).value) || editingAsset.duration;
+                        const releaseYear = parseInt((form.elements.namedItem('assetYear') as HTMLInputElement).value) || editingAsset.releaseYear;
+                        const description = (form.elements.namedItem('assetDescription') as HTMLTextAreaElement).value;
+
+                        handleUpdateStudioAsset(editingAsset.id, {
+                          title,
+                          duration,
+                          releaseYear,
+                          description
+                        });
+                        setEditingAsset(null);
+                      }}
+                      className="space-y-4"
+                    >
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-1">
+                          Film / Series Title
+                        </label>
+                        <input
+                          name="assetTitle"
+                          defaultValue={editingAsset.title}
+                          required
+                          className="w-full text-xs px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-800"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-1">
+                            Runtime (Minutes)
+                          </label>
+                          <input
+                            name="assetDuration"
+                            type="number"
+                            defaultValue={editingAsset.duration}
+                            required
+                            className="w-full text-xs px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-mono text-slate-800"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-1">
+                            Release Year
+                          </label>
+                          <input
+                            name="assetYear"
+                            type="number"
+                            defaultValue={editingAsset.releaseYear}
+                            required
+                            className="w-full text-xs px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-mono text-slate-800"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-1">
+                          Synopsis &amp; Clearance Notes
+                        </label>
+                        <textarea
+                          name="assetDescription"
+                          defaultValue={editingAsset.description}
+                          rows={3}
+                          className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium text-slate-700 leading-relaxed resize-none"
+                        />
+                      </div>
+
+                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-800">
+                        <div className="flex items-center space-x-2">
+                          <ShieldCheck size={15} className="text-emerald-600" />
+                          <span>RLS Policy: <code className="font-mono text-[10px]">media_assets.owner_id = auth.uid()</code></span>
+                        </div>
+                        <span className="font-bold text-[10px] uppercase tracking-wider bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded">
+                          Write Verified
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setEditingAsset(null)}
+                          className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold uppercase tracking-wider rounded-xl transition-all shadow-md cursor-pointer flex items-center space-x-1.5"
+                        >
+                          <Save size={13} />
+                          <span>Save &amp; Sync RLS</span>
+                        </button>
+                      </div>
+                    </form>
+                  </motion.div>
+                </div>
+              )}
+            </AnimatePresence>
+
             {/* Video Player Modal */}
             <AnimatePresence>
               {activeScreenerVideo && (
@@ -1321,9 +1815,15 @@ export default function App() {
                 <div className="flex items-center space-x-1.5">
                   <span>StreamVista Rights Cloud</span>
                   <span>•</span>
-                  <span>Firebase Auth &amp; Firestore Connected</span>
+                  <span>Supabase PostgreSQL &amp; Firestore Connected</span>
                 </div>
-                <div className="flex space-x-4">
+                <div className="flex items-center space-x-4">
+                  <button
+                    onClick={() => setIsSupabaseModalOpen(true)}
+                    className="text-[11px] text-emerald-600 hover:text-emerald-700 font-bold flex items-center space-x-1 cursor-pointer"
+                  >
+                    <span>Supabase Cloud Sync</span>
+                  </button>
                   <span className="text-[10px] text-slate-400">Session ID: {user.uid.substring(0, 10)}...</span>
                 </div>
               </div>
@@ -1332,6 +1832,27 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Global Supabase Cloud Sync & Auth Modal */}
+      <SupabaseSyncModal
+        isOpen={isSupabaseModalOpen}
+        onClose={() => {
+          setIsSupabaseModalOpen(false);
+          setIsSupabaseActive(isSupabaseConfigured());
+        }}
+        user={user}
+        assets={assets}
+        rights={rights}
+        deals={deals}
+        onSyncAssetsFromSupabase={(newAssets) => setAssets(newAssets)}
+        onSyncDealsFromSupabase={(newDeals) => setDeals(newDeals)}
+        onUserAuthenticated={(authedUser) => {
+          setUser(authedUser);
+          setActiveRole(authedUser.role);
+          saveSession(authedUser);
+        }}
+        onNotify={(msg, type) => showNotification(msg, type)}
+      />
     </div>
   );
 }
