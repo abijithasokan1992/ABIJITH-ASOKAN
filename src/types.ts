@@ -140,3 +140,138 @@ export interface AuditLog {
   timestamp: number;
 }
 
+export interface RealUser {
+  id: number;
+  username: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone?: string;
+  is_superuser: number;
+  is_staff: number;
+  is_active: number;
+  date_joined: string;
+  last_login?: string;
+  profile_picture?: string;
+  company?: string;
+  company_name?: string;
+  bio?: string;
+  business_type?: string;
+  country?: string;
+  user_type?: string;
+  user_subcategory?: string;
+  rights_confirmation?: number;
+  terms_accepted?: number;
+  website?: string;
+}
+
+export interface RealFilm {
+  id: number;
+  title: string;
+  description: string;
+  content_type: string;
+  director: string;
+  producer: string;
+  cast: string;
+  duration: number;
+  language: string;
+  country: string;
+  video_file: string;
+  poster: string;
+  trailer: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  views_count: number;
+  budget?: number | null;
+  rights_available: number;
+  distribution_territories: string;
+  uploaded_by_id: number;
+  uuid: string;
+  upload_approved: number;
+  upload_requested: number;
+  release_date?: string | null;
+}
+
+export interface FilmBuyerMapping {
+  id: number;
+  mapped_at: string;
+  notes: string;
+  is_active: number;
+  buyer_id: number;
+  film_id: number;
+  mapped_by_id: number;
+  allow_download: number;
+  download_requested: number;
+}
+
+export interface FilmDraft {
+  id: string;
+  title: string;
+  description: string;
+  content_type: string;
+  director: string;
+  producer: string;
+  cast: string;
+  duration?: number | null;
+  release_date?: string | null;
+  language: string;
+  country: string;
+  distribution_territories: string;
+  budget?: number | null;
+  rights_available: number;
+  licensing_terms: string;
+  created_at: string;
+  updated_at: string;
+  uploaded_by_id: number;
+  completed_tabs?: string[];
+}
+
+export interface RazorpayPayment {
+  id: number;
+  amount: number;
+  currency: string;
+  status: 'pending' | 'success' | 'failed' | string;
+  razorpay_order_id: string;
+  razorpay_payment_id?: string | null;
+  razorpay_signature?: string | null;
+  receipt: string;
+  notes: {
+    user_id?: number;
+    user_email?: string;
+    user_name?: string;
+  };
+  created_at: string;
+  updated_at: string;
+  user_id: number;
+}
+
+export interface VideoUpload {
+  id: number;
+  file_name: string;
+  s3_key: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  film_id: number;
+  file_type: string;
+}
+
+export interface LoginToken {
+  id: number;
+  created_at: string;
+  expires_at: string;
+  used: number;
+  user_id: number;
+  id_hash: string;
+}
+
+export interface ViewHistoryRecord {
+  id: number;
+  watched_at: string;
+  watch_duration: number;
+  film_id: number;
+  user_id: number;
+}
+
+
