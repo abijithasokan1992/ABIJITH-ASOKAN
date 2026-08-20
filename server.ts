@@ -39,20 +39,59 @@ async function startServer() {
     });
   });
 
-  // 1. Multi-turn AI Chat Endpoint (StreamVista Licensing Copilot)
+  // 1. Multi-turn AI Chat Endpoint (StreamVista Licensing & Rights Legal Copilot)
   app.post("/api/ai/chat", async (req, res) => {
     try {
-      const { messages, model = "gemini-3.5-flash", systemInstruction } = req.body;
+      const { 
+        messages, 
+        model = "gemini-3.5-flash", 
+        tier = "fast",
+        mode = "rights",
+        systemInstruction,
+        contextData
+      } = req.body;
       const ai = getAIClient();
 
-      const defaultSystem = `You are STREAMVISTA AI, the authoritative B2B Film & Television Licensing, Rights Management, and Global Media Distribution Copilot.
-You assist buyers (streaming platforms, broadcasters, aggregators), content owners (studios, producers, sales agents), and legal counsels.
-You specialize in:
-1. Territory windows (Theatrical, SVOD, AVOD, TVOD, Pay TV, Inflight, Linear).
-2. Deal structuring, minimum guarantees (MG), revenue shares, holdbacks, and clearance.
-3. Rights valuation, box office benchmarks, and film catalogue optimization.
-4. Drafting clear licensing deal memos and screening access terms under StreamVista.
-Provide structured, professional, and actionable industry advice.`;
+      let selectedModel = model;
+      if (tier === 'deep') {
+        selectedModel = "gemini-3.1-pro-preview";
+      } else if (tier === 'ultra_fast') {
+        selectedModel = "gemini-3.1-flash-lite";
+      } else if (tier === 'fast') {
+        selectedModel = "gemini-3.5-flash";
+      }
+
+      if (selectedModel === "gemini-3.1-pro" || selectedModel === "gemini-pro") selectedModel = "gemini-3.1-pro-preview";
+      if (selectedModel === "gemini-flash" || !selectedModel) selectedModel = "gemini-3.5-flash";
+      if (selectedModel === "gemini-lite" || selectedModel === "gemini-flash-lite") selectedModel = "gemini-3.1-flash-lite";
+
+      const modeInstructions: Record<string, string> = {
+        rights: `You are STREAMVISTA AI - Rights Intelligence Executive.
+Specializing in: Title ownership, Rights holders, Assignments, License scope, Territory matrix, Language tiers, Platform holdbacks (Theatrical/SVOD/AVOD/TVOD/PayTV/Inflight), Exclusivity, Terms, Encumbrances, and Reserved rights.
+Rule: Clearly differentiate between verified rights records, unencumbered rights, and uncertain/disputed rights. Always cite document provenance when provided. Disclaimer: Commercial intelligence analysis, not formal legal representation.`,
+        localisation: `You are STREAMVISTA AI - Localisation Producer & Territory Expansion Strategist.
+Specializing in: Subtitle and Dubbing workflows, Territory-to-language mappings, Audio stems/TTML delivery specs, Localisation cost estimation in INR, Censorship compliance (CBFC, GCC NMC), Artwork localization, and Margins.
+Model the pipeline: TITLE → MASTER → LANGUAGE → VERSION → TERRITORY → PLATFORM → DELIVERY.`,
+        deals: `You are STREAMVISTA AI - Deal Structuring & Licensing Analyst.
+Specializing in: Minimum Guarantees (MG), Revenue shares, Recoupment waterfall, Advance milestone disbursements, Platform windows, Performance and Delivery obligations. Break down deals by Commercial Value, Rights Given vs Retained, Territory exposure, and MG coverage.`,
+        negotiation: `You are STREAMVISTA AI - Buyer Negotiation Copilot.
+Given buyer proposals or term sheets, structure your assessment systematically:
+1. BUYER ASK
+2. STREAMVISTA POSITION
+3. COMMERCIAL GAP
+4. RIGHTS LEAKAGE & RISK
+5. RECOMMENDED COUNTERPROPOSAL
+6. STRATEGIC RATIONALE & WALK-AWAY CONDITIONS.`,
+        covenants: `You are STREAMVISTA AI - Contract & Covenant Architect.
+Specializing in structured contractual obligations: Territory covenants, Exclusivity protections, Minimum performance thresholds, Delivery & QC timelines, Reporting obligations, and Remedies for breach. Format covenants with Owner, Trigger, Obligation, Deadline, Evidence Required, and Failure Remedy.`,
+        founder: `You are STREAMVISTA AI - Founder & Executive Decision-Support System for Abijith Asokan.
+Provide macro-strategic insights: Expiring rights opportunities, under-monetized territories, buyer creditworthiness & relationship health, pipeline monetization bottlenecks, and immediate high-priority negotiation actions.`
+      };
+
+      const baseInstruction = systemInstruction || modeInstructions[mode] || modeInstructions.rights;
+      const enrichedSystem = contextData 
+        ? `${baseInstruction}\n\n[Active Production Context]\n${typeof contextData === 'string' ? contextData : JSON.stringify(contextData, null, 2)}`
+        : baseInstruction;
 
       const contents = (messages || []).map((m: any) => ({
         role: m.role === "user" ? "user" : "model",
@@ -63,24 +102,20 @@ Provide structured, professional, and actionable industry advice.`;
         return res.status(400).json({ error: "No messages provided" });
       }
 
-      // Valid model fallback
-      let selectedModel = model;
-      if (selectedModel === "gemini-3.1-pro" || selectedModel === "gemini-pro") selectedModel = "gemini-3.1-pro-preview";
-      if (selectedModel === "gemini-flash" || !selectedModel) selectedModel = "gemini-3.5-flash";
-      if (selectedModel === "gemini-lite" || selectedModel === "gemini-flash-lite") selectedModel = "gemini-3.1-flash-lite";
-
       const response = await ai.models.generateContent({
         model: selectedModel,
         contents,
         config: {
-          systemInstruction: systemInstruction || defaultSystem,
-          temperature: 0.7,
+          systemInstruction: enrichedSystem,
+          temperature: tier === 'deep' ? 0.3 : 0.7,
         },
       });
 
       res.json({
         text: response.text || "No response generated.",
-        modelUsed: selectedModel
+        modelUsed: selectedModel,
+        tierUsed: tier,
+        modeUsed: mode
       });
     } catch (err: any) {
       console.error("AI Chat Error:", err);

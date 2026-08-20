@@ -274,4 +274,137 @@ export interface ViewHistoryRecord {
   user_id: number;
 }
 
+// ==========================================
+// STREAMVISTA AI - RIGHTS & LEGAL COPILOT
+// ==========================================
+
+export type CopilotMode = 
+  | 'rights' 
+  | 'localisation' 
+  | 'deals' 
+  | 'negotiation' 
+  | 'covenants' 
+  | 'founder' 
+  | 'matrix' 
+  | 'documents';
+
+export type ReasoningTier = 'fast' | 'deep' | 'ultra_fast';
+
+export type RightsStatus = 'AVAILABLE' | 'RESERVED' | 'NEGOTIATING' | 'LICENSED' | 'EXPIRED' | 'BLOCKED' | 'UNKNOWN' | 'CONFLICT';
+
+export type RightsPlatform = 'THEATRICAL' | 'SVOD' | 'AVOD' | 'TVOD' | 'PAY_TV' | 'FREE_TV' | 'INFLIGHT' | 'HOTEL' | 'PHYSICAL_HOME_VIDEO' | 'NON_THEATRICAL';
+
+export type ExclusivityType = 'EXCLUSIVE' | 'NON_EXCLUSIVE' | 'CO_EXCLUSIVE' | 'HOLD_BACK';
+
+export interface CanonicalRightsRecord {
+  id: string;
+  titleId: string;
+  filmId: number;
+  titleName: string;
+  rightsHolder: string;
+  territory: string;
+  language: string;
+  platform: RightsPlatform;
+  medium: string;
+  exclusivity: ExclusivityType;
+  termStartDate: string;
+  termEndDate: string;
+  holdbacks?: string;
+  renewalClause?: string;
+  reservedRights?: string[];
+  encumbrances?: string;
+  status: RightsStatus;
+  buyerName?: string;
+  dealId?: string;
+  confidenceScore: number;
+  provenanceDocument?: string;
+  provenancePageSection?: string;
+}
+
+export interface LocalisationPlan {
+  id: string;
+  filmId: number;
+  title: string;
+  originalLanguage: string;
+  targetLanguage: string;
+  targetTerritory: string;
+  buyerPlatform: string;
+  dubbingRequired: boolean;
+  subtitlesRequired: boolean;
+  artworkLocalisationRequired: boolean;
+  censorshipComplianceRequired: boolean;
+  deliverySpec: string;
+  qcStatus: 'PENDING' | 'IN_PROGRESS' | 'PASSED' | 'FAILED';
+  estimatedCostINR: number;
+  expectedLicenceValueINR: number;
+  expectedMarginPercent: number;
+  deliveryDeadline: string;
+  recommendationScore: number;
+  reasoning: string;
+}
+
+export interface DealAnalysisReport {
+  dealId: string;
+  filmTitle: string;
+  buyerName: string;
+  executiveSummary: string;
+  commercialValueINR: number;
+  minimumGuaranteeINR: number;
+  revenueSharePercent: number;
+  rightsGiven: string[];
+  rightsRetained: string[];
+  territoryExposure: string[];
+  windowExposure: string[];
+  exclusivityRisk: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  mgAnalysis: string;
+  revenueShareAnalysis: string;
+  localisationBurdenINR: number;
+  deliveryBurden: string;
+  contractRisks: string[];
+  negotiationLeverage: 'FAVORABLE' | 'NEUTRAL' | 'CHALLENGING';
+  recommendedPosition: string;
+  walkAwayConditions: string[];
+}
+
+export interface NegotiationWorkbenchItem {
+  id: string;
+  dealId?: string;
+  buyerName: string;
+  filmTitle: string;
+  buyerAsk: string;
+  streamvistaPosition: string;
+  commercialGap: string;
+  riskAssessment: string;
+  suggestedCounter: string;
+  strategicRationale: string;
+  negotiationPriority: 'HIGH' | 'MEDIUM' | 'LOW';
+  walkAwayTrigger: string;
+}
+
+export interface StructuredCovenant {
+  id: string;
+  dealId?: string;
+  filmTitle: string;
+  covenantType: 'TERRITORY' | 'EXCLUSIVITY' | 'MIN_PERFORMANCE' | 'RELEASE' | 'MARKETING' | 'DELIVERY' | 'REPORTING' | 'PAYMENT' | 'AUDIT' | 'RENEWAL' | 'RIGHTS_REVERSION' | 'LOCALISATION';
+  owner: string;
+  trigger: string;
+  obligation: string;
+  deadline: string;
+  evidenceRequired: string;
+  failureCondition: string;
+  remedy: string;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  status: 'PENDING' | 'COMPLIANT' | 'BREACHED' | 'DISPUTED';
+}
+
+export interface ProvenanceExtractedFact {
+  id: string;
+  documentName: string;
+  pageOrSection: string;
+  extractedFact: string;
+  confidence: number;
+  aiInterpretation: string;
+  verifiedByLegal: boolean;
+}
+
 
