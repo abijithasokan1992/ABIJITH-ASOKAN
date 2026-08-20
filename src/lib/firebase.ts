@@ -1,13 +1,75 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, getDocs, collection, query, where, onSnapshot } from 'firebase/firestore';
+import { 
+  getFirestore, doc, setDoc, getDoc, getDocs, collection, 
+  query, where, onSnapshot, getDocFromServer, serverTimestamp 
+} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { UserProfile, UserRole } from '../types';
 
-const app = initializeApp(firebaseConfig);
+export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
-let isSigningIn = false;
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.warn('Firestore Error Context:', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+// Quick validation of Firestore connection
+async function validateFirestoreConnection() {
+  try {
+    await getDocFromServer(doc(db, 'system', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firestore connectivity check: client is offline or starting up.');
+    }
+  }
+}
+validateFirestoreConnection();
+
 let cachedAccessToken: string | null = null;
 
 export const initAuth = (
@@ -16,11 +78,8 @@ export const initAuth = (
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else {
-        // User is signed into Firebase Auth
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken || '');
+      if (onAuthSuccess) {
+        onAuthSuccess(user, cachedAccessToken || '');
       }
     } else {
       cachedAccessToken = null;
@@ -31,13 +90,9 @@ export const initAuth = (
 
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
-    isSigningIn = true;
-    
-    // Attempt login with Google Provider
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     
-    // Try with requested Gmail scopes
     try {
       provider.addScope('https://www.googleapis.com/auth/gmail.readonly');
       provider.addScope('https://www.googleapis.com/auth/gmail.send');
@@ -49,7 +104,6 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     try {
       result = await signInWithPopup(auth, provider);
     } catch (primaryErr: any) {
-      // If scoped provider encountered internal-error or popup issues, retry with base Google provider
       if (primaryErr?.code === 'auth/internal-error' || primaryErr?.code === 'auth/invalid-oauth-provider') {
         const basicProvider = new GoogleAuthProvider();
         result = await signInWithPopup(auth, basicProvider);
@@ -61,12 +115,60 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     const credential = GoogleAuthProvider.credentialFromResult(result);
     cachedAccessToken = credential?.accessToken || null;
     
+    // Auto sync user document in Firestore
+    if (result.user) {
+      try {
+        const userDocRef = doc(db, 'users', result.user.uid);
+        await setDoc(userDocRef, {
+          uid: result.user.uid,
+          email: result.user.email || '',
+          displayName: result.user.displayName || 'Google User',
+          photoURL: result.user.photoURL || null,
+          role: result.user.email?.includes('admin') || result.user.email?.includes('abijith') ? 'ADMIN' : 'BUYER',
+          lastLogin: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      } catch (dbErr) {
+        console.warn('Initial user profile sync notice (non-fatal):', dbErr);
+      }
+    }
+
     return { user: result.user, accessToken: cachedAccessToken || '' };
   } catch (error: any) {
-    console.warn('Google sign-in attempt:', error?.code || error?.message || error);
+    console.warn('Google sign-in attempt notice:', error?.code || error?.message || error);
     throw error;
-  } finally {
-    isSigningIn = false;
+  }
+};
+
+export const syncUserProfile = async (user: User, role: UserRole = 'BUYER'): Promise<void> => {
+  const userPath = `users/${user.uid}`;
+  try {
+    const userDocRef = doc(db, 'users', user.uid);
+    await setDoc(userDocRef, {
+      uid: user.uid,
+      email: user.email || '',
+      displayName: user.displayName || 'Google User',
+      photoURL: user.photoURL || null,
+      role: role,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, userPath);
+  }
+};
+
+export const getUserProfile = async (uid: string): Promise<UserProfile | null> => {
+  const userPath = `users/${uid}`;
+  try {
+    const userDocRef = doc(db, 'users', uid);
+    const snap = await getDoc(userDocRef);
+    if (snap.exists()) {
+      return snap.data() as UserProfile;
+    }
+    return null;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, userPath);
+    return null;
   }
 };
 
@@ -78,4 +180,5 @@ export const logout = async () => {
   await auth.signOut();
   cachedAccessToken = null;
 };
+
 
