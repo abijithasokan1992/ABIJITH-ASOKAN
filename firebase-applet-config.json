@@ -3,7 +3,10 @@
   "appId": "1:708987742345:web:90108052c728b6598dbe58",
   "apiKey": "AIzaSyCM8gZFJ2KQy_RYh5O61_EK1N-UtEHot6o",
   "authDomain": "streamvista-agent.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-streamvistaright-e1cf8924-2415-4036-b72f-b8a0a33cb35c",
   "storageBucket": "streamvista-agent.firebasestorage.app",
   "messagingSenderId": "708987742345",
-  "measurementId": "G-QX5RKQ2SN4"
+  "measurementId": "G-QX5RKQ2SN4",
+  "oAuthClientId": "708987742345-sprn04aba0r2kdkhlfn2l50hrjjjrfll.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }
